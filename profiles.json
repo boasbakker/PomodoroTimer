@@ -1,0 +1,23 @@
+[
+  {
+    "name": "Classic 25/5/15",
+    "work_min": 25,
+    "short_break_min": 5,
+    "long_break_every": 4,
+    "long_break_min": 15
+  },
+  {
+    "name": "Deep 50/10/20",
+    "work_min": 50,
+    "short_break_min": 10,
+    "long_break_every": 3,
+    "long_break_min": 20
+  },
+  {
+    "name": "WLG",
+    "work_min": 65,
+    "short_break_min": 5,
+    "long_break_every": 2,
+    "long_break_min": 25
+  }
+]

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pomodoro</title>
+    <link rel="stylesheet" href="tab.css" />
+</head>
+
+<body>
+    <main class="app">
+        <header class="top">
+            <div>
+                <p class="eyebrow">Zen Pomodoro</p>
+                <h1>Focus in bold strokes.</h1>
+                <p id="todayLine" class="subdued">Today</p>
+            </div>
+            <div class="stats">
+                <div class="stat">
+                    <span class="stat-label">Sessions</span>
+                    <span id="todayCount" class="stat-value">0</span>
+                </div>
+                <label class="toggle">
+                    <span>Sound</span>
+                    <input id="soundToggle" type="checkbox" />
+                </label>
+            </div>
+        </header>
+
+        <section class="timer-card">
+            <div id="progressRing" class="ring">
+                <div class="ring-core">
+                    <p id="modeLabel" class="mode">Work</p>
+                    <p id="timeLeft" class="timer">25:00</p>
+                    <p id="statusLine" class="status">Ready</p>
+                </div>
+            </div>
+            <div class="controls">
+                <button id="startBtn" class="btn primary">Start</button>
+                <button id="pauseBtn" class="btn">Pause</button>
+                <button id="resetBtn" class="btn ghost">Reset</button>
+            </div>
+            <p id="messageLine" class="message" aria-live="polite"></p>
+        </section>
+
+        <section class="profile-card">
+            <div class="grid">
+                <label class="field">
+                    <span>Profile</span>
+                    <select id="profileSelect"></select>
+                </label>
+                <label class="field">
+                    <span>Name</span>
+                    <input id="nameInput" type="text" />
+                </label>
+                <label class="field">
+                    <span>Work (min)</span>
+                    <input id="workInput" type="number" min="1" />
+                </label>
+                <label class="field">
+                    <span>Short break (min)</span>
+                    <input id="shortBreakInput" type="number" min="1" />
+                </label>
+                <label class="field">
+                    <span>Long break every</span>
+                    <input id="longEveryInput" type="number" min="1" />
+                </label>
+                <label class="field">
+                    <span>Long break (min)</span>
+                    <input id="longBreakInput" type="number" min="1" />
+                </label>
+            </div>
+            <div class="controls">
+                <button id="saveProfileBtn" class="btn">Save profile</button>
+                <button id="deleteProfileBtn" class="btn ghost">Delete profile</button>
+                <button id="defaultsBtn" class="btn ghost">Defaults</button>
+            </div>
+        </section>
+    </main>
+
+    <script src="tab.js"></script>
+</body>
+
+</html>
