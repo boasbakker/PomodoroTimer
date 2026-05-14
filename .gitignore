@@ -1,0 +1,21 @@
+node_modules/
+package-lock.json
+
+# Capacitor / Android build artifacts
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/app/release/
+android/capacitor-cordova-android-plugins/build/
+android/local.properties
+android/.cxx/
+*.iml
+
+# Generated APK / AAB
+*.apk
+*.aab
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,4 +1,51 @@
-const api = typeof browser !== "undefined" ? browser : chrome;
+const api = { storage: { local: {
+    async get(keys) {
+        const out = {};
+        for (const k of keys) {
+            const v = localStorage.getItem(k);
+            if (v !== null) {
+                try { out[k] = JSON.parse(v); } catch { out[k] = v; }
+            }
+        }
+        return out;
+    },
+    async set(obj) {
+        for (const [k, v] of Object.entries(obj)) {
+            localStorage.setItem(k, JSON.stringify(v));
+        }
+    },
+} } };
+
+const NOTIF_ID = 1;
+function getLN() {
+    if (window.LocalNotifications) return window.LocalNotifications;
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) {
+        return window.Capacitor.Plugins.LocalNotifications;
+    }
+    return null;
+}
+async function scheduleEndNotif(at, mode) {
+    const LN = getLN();
+    if (!LN) return;
+    try {
+        await LN.cancel({ notifications: [{ id: NOTIF_ID }] });
+        await LN.schedule({
+            notifications: [{
+                id: NOTIF_ID,
+                title: "Zen Pomodoro",
+                body: mode === "work" ? "Work session complete." : "Break over.",
+                schedule: { at: new Date(at) },
+            }],
+        });
+    } catch (e) {}
+}
+async function cancelEndNotif() {
+    const LN = getLN();
+    if (!LN) return;
+    try {
+        await LN.cancel({ notifications: [{ id: NOTIF_ID }] });
+    } catch (e) {}
+}
 
 const DEFAULT_PROFILES = [
     {
@@ -310,6 +357,7 @@ function completeSession() {
 
     state.remainingMs = getDurationMs(profile, state.mode);
     state.endTime = Date.now() + state.remainingMs;
+    scheduleEndNotif(state.endTime, state.mode);
 }
 
 async function loadStorage() {
@@ -368,6 +416,7 @@ function bindEvents() {
             state.running = true;
             state.paused = false;
             state.endTime = Date.now() + state.remainingMs;
+            scheduleEndNotif(state.endTime, state.mode);
             startTicking();
             updateTimerDisplay();
             return;
@@ -387,6 +436,7 @@ function bindEvents() {
         state.running = true;
         state.paused = false;
 
+        scheduleEndNotif(state.endTime, state.mode);
         startTicking();
         updateTimerDisplay();
     });
@@ -399,11 +449,13 @@ function bindEvents() {
         state.running = false;
         state.paused = true;
         stopTicking();
+        cancelEndNotif();
         updateTimerDisplay();
     });
 
     els.resetBtn.addEventListener("click", () => {
         stopTicking();
+        cancelEndNotif();
         state.running = false;
         state.paused = false;
         state.mode = "work";
@@ -492,13 +544,21 @@ function bindEvents() {
     });
 
     document.addEventListener("visibilitychange", () => {
-        if (!state.running) {
-            updateTimerDisplay();
+        if (state.running) {
+            state.remainingMs = Math.max(0, state.endTime - Date.now());
+            if (state.remainingMs <= 0) {
+                completeSession();
+            }
         }
+        updateTimerDisplay();
     });
 }
 
 async function init() {
+    const LN = getLN();
+    if (LN) {
+        try { await LN.requestPermissions(); } catch (e) {}
+    }
     await loadStorage();
     bindEvents();
     updateTimerDisplay();
