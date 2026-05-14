@@ -16,7 +16,10 @@ const api = { storage: { local: {
     },
 } } };
 
-const NOTIF_ID = 1;
+const NOTIF_ID_CURRENT = 1;
+const NOTIF_ID_NEXT = 2;
+const NOTIF_CHANNEL_ID = "pomodoro";
+
 function getLN() {
     if (window.LocalNotifications) return window.LocalNotifications;
     if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) {
@@ -24,26 +27,43 @@ function getLN() {
     }
     return null;
 }
-async function scheduleEndNotif(at, mode) {
+
+function bodyForEndOf(mode) {
+    return mode === "work" ? "Work session complete." : "Break over.";
+}
+
+async function scheduleNotifs(currentAt, currentMode, nextAt, nextMode) {
     const LN = getLN();
     if (!LN) return;
     try {
-        await LN.cancel({ notifications: [{ id: NOTIF_ID }] });
-        await LN.schedule({
-            notifications: [{
-                id: NOTIF_ID,
+        await LN.cancel({ notifications: [{ id: NOTIF_ID_CURRENT }, { id: NOTIF_ID_NEXT }] });
+        const notifications = [
+            {
+                id: NOTIF_ID_CURRENT,
                 title: "Zen Pomodoro",
-                body: mode === "work" ? "Work session complete." : "Break over.",
-                schedule: { at: new Date(at) },
-            }],
-        });
+                body: bodyForEndOf(currentMode),
+                schedule: { at: new Date(currentAt) },
+                channelId: NOTIF_CHANNEL_ID,
+            },
+        ];
+        if (nextAt && nextMode) {
+            notifications.push({
+                id: NOTIF_ID_NEXT,
+                title: "Zen Pomodoro",
+                body: bodyForEndOf(nextMode),
+                schedule: { at: new Date(nextAt) },
+                channelId: NOTIF_CHANNEL_ID,
+            });
+        }
+        await LN.schedule({ notifications });
     } catch (e) {}
 }
-async function cancelEndNotif() {
+
+async function cancelAllNotifs() {
     const LN = getLN();
     if (!LN) return;
     try {
-        await LN.cancel({ notifications: [{ id: NOTIF_ID }] });
+        await LN.cancel({ notifications: [{ id: NOTIF_ID_CURRENT }, { id: NOTIF_ID_NEXT }] });
     } catch (e) {}
 }
 
@@ -106,6 +126,7 @@ const els = {
     shortBreakInput: document.getElementById("shortBreakInput"),
     longEveryInput: document.getElementById("longEveryInput"),
     longBreakInput: document.getElementById("longBreakInput"),
+    newProfileBtn: document.getElementById("newProfileBtn"),
     saveProfileBtn: document.getElementById("saveProfileBtn"),
     deleteProfileBtn: document.getElementById("deleteProfileBtn"),
     defaultsBtn: document.getElementById("defaultsBtn"),
@@ -117,8 +138,13 @@ let soundEnabled = true;
 let tickTimer = null;
 let audioContext = null;
 
+let alarmActive = false;
+let alarmInterval = null;
+let suppressNextClick = false;
+let creatingNew = false;
+
 function formatTime(ms) {
-    const totalSeconds = Math.max(0, Math.round(ms / 1000));
+    const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
     return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
@@ -153,6 +179,17 @@ function getDurationMs(profile, mode) {
         return profile.longBreakMin * 60 * 1000;
     }
     return profile.workMin * 60 * 1000;
+}
+
+function nextModeAfter(profile, currentMode, currentWorkSessions) {
+    if (currentMode === "work") {
+        const newWorkSessions = currentWorkSessions + 1;
+        if (newWorkSessions % profile.longBreakEvery === 0) {
+            return "long_break";
+        }
+        return "short_break";
+    }
+    return "work";
 }
 
 function setMessage(text) {
@@ -274,25 +311,26 @@ function startTicking() {
         if (!state.running) {
             return;
         }
-        const now = Date.now();
-        state.remainingMs = Math.max(0, state.endTime - now);
-        if (state.remainingMs <= 0) {
-            completeSession();
-        }
+        catchUp();
         updateTimerDisplay();
     }, 200);
 }
 
-function ensureAudioContext() {
+async function ensureAudioContext() {
     if (audioContext) {
         if (audioContext.state === "suspended") {
-            audioContext.resume();
+            try { await audioContext.resume(); } catch (e) {}
         }
         return;
     }
 
     try {
-        audioContext = new AudioContext();
+        const Ctor = window.AudioContext || window.webkitAudioContext;
+        if (!Ctor) {
+            audioContext = null;
+            return;
+        }
+        audioContext = new Ctor();
     } catch (error) {
         audioContext = null;
     }
@@ -302,9 +340,11 @@ function playAlarm() {
     if (!soundEnabled) {
         return;
     }
-    ensureAudioContext();
     if (!audioContext) {
         return;
+    }
+    if (audioContext.state === "suspended") {
+        audioContext.resume();
     }
 
     const now = audioContext.currentTime;
@@ -325,6 +365,28 @@ function playAlarm() {
     oscillator.stop(now + 0.32);
 }
 
+function startPersistentAlarm() {
+    if (alarmActive) {
+        return;
+    }
+    alarmActive = true;
+    playAlarm();
+    alarmInterval = setInterval(playAlarm, 1500);
+    setMessage("Hold any button for 3 s to dismiss the alarm.");
+}
+
+function stopPersistentAlarm() {
+    if (!alarmActive) {
+        return;
+    }
+    alarmActive = false;
+    if (alarmInterval) {
+        clearInterval(alarmInterval);
+        alarmInterval = null;
+    }
+    setMessage("");
+}
+
 function incrementStats() {
     const key = todayKey();
     stats[key] = (stats[key] || 0) + 1;
@@ -332,17 +394,7 @@ function incrementStats() {
     updateStatsDisplay();
 }
 
-function completeSession() {
-    playAlarm();
-
-    const profile = state.activeProfile || getProfileFromFields();
-    if (!profile) {
-        state.running = false;
-        state.paused = false;
-        resetTimerFromProfile();
-        return;
-    }
-
+function transitionInPlace(profile) {
     if (state.mode === "work") {
         state.workSessionsCompleted += 1;
         incrementStats();
@@ -354,10 +406,42 @@ function completeSession() {
     } else {
         state.mode = "work";
     }
+    state.endTime += getDurationMs(profile, state.mode);
+}
 
-    state.remainingMs = getDurationMs(profile, state.mode);
-    state.endTime = Date.now() + state.remainingMs;
-    scheduleEndNotif(state.endTime, state.mode);
+function catchUp() {
+    if (!state.running) {
+        return;
+    }
+    const profile = state.activeProfile;
+    if (!profile) {
+        state.running = false;
+        state.paused = false;
+        resetTimerFromProfile();
+        return;
+    }
+    const now = Date.now();
+    let transitioned = false;
+    while (now >= state.endTime) {
+        transitionInPlace(profile);
+        transitioned = true;
+    }
+    state.remainingMs = Math.max(0, state.endTime - now);
+    if (transitioned) {
+        startPersistentAlarm();
+        rescheduleNotifsForActive();
+    }
+}
+
+function rescheduleNotifsForActive() {
+    if (!state.running || !state.activeProfile) {
+        cancelAllNotifs();
+        return;
+    }
+    const profile = state.activeProfile;
+    const nextMode = nextModeAfter(profile, state.mode, state.workSessionsCompleted);
+    const nextEnd = state.endTime + getDurationMs(profile, nextMode);
+    scheduleNotifs(state.endTime, state.mode, nextEnd, nextMode);
 }
 
 async function loadStorage() {
@@ -385,8 +469,42 @@ async function loadStorage() {
     els.soundToggle.checked = soundEnabled;
 }
 
+function attachDismissHold(btn) {
+    let holdTimer = null;
+    const cancel = () => {
+        if (holdTimer) {
+            clearTimeout(holdTimer);
+            holdTimer = null;
+        }
+    };
+    btn.addEventListener("pointerdown", () => {
+        if (!alarmActive) return;
+        cancel();
+        holdTimer = setTimeout(() => {
+            holdTimer = null;
+            suppressNextClick = true;
+            stopPersistentAlarm();
+        }, 3000);
+    });
+    btn.addEventListener("pointerup", cancel);
+    btn.addEventListener("pointerleave", cancel);
+    btn.addEventListener("pointercancel", cancel);
+}
+
+function consumeAlarmClick() {
+    if (suppressNextClick) {
+        suppressNextClick = false;
+        return true;
+    }
+    if (alarmActive) {
+        return true;
+    }
+    return false;
+}
+
 function bindEvents() {
     els.profileSelect.addEventListener("change", () => {
+        creatingNew = false;
         const selected = profiles.find(
             (profile) => profile.name === els.profileSelect.value
         );
@@ -394,7 +512,14 @@ function bindEvents() {
         api.storage.local.set({
             [STORAGE_KEYS.selectedProfile]: els.profileSelect.value,
         });
-        if (!state.running) {
+        if (state.running || state.paused) {
+            if (selected) {
+                state.activeProfile = selected;
+                if (state.running) {
+                    rescheduleNotifsForActive();
+                }
+            }
+        } else {
             resetTimerFromProfile();
         }
     });
@@ -404,9 +529,10 @@ function bindEvents() {
         api.storage.local.set({ [STORAGE_KEYS.soundEnabled]: soundEnabled });
     });
 
-    els.startBtn.addEventListener("click", () => {
+    els.startBtn.addEventListener("click", async () => {
+        if (consumeAlarmClick()) return;
         setMessage("");
-        ensureAudioContext();
+        await ensureAudioContext();
 
         if (state.running) {
             return;
@@ -416,7 +542,7 @@ function bindEvents() {
             state.running = true;
             state.paused = false;
             state.endTime = Date.now() + state.remainingMs;
-            scheduleEndNotif(state.endTime, state.mode);
+            rescheduleNotifsForActive();
             startTicking();
             updateTimerDisplay();
             return;
@@ -436,32 +562,57 @@ function bindEvents() {
         state.running = true;
         state.paused = false;
 
-        scheduleEndNotif(state.endTime, state.mode);
+        rescheduleNotifsForActive();
         startTicking();
         updateTimerDisplay();
     });
 
     els.pauseBtn.addEventListener("click", () => {
+        if (consumeAlarmClick()) return;
         if (!state.running) {
             return;
         }
-        state.remainingMs = Math.max(0, state.endTime - Date.now());
+        const remaining = state.endTime - Date.now();
+        if (remaining <= 0) {
+            catchUp();
+            updateTimerDisplay();
+            return;
+        }
+        state.remainingMs = remaining;
         state.running = false;
         state.paused = true;
         stopTicking();
-        cancelEndNotif();
+        cancelAllNotifs();
         updateTimerDisplay();
     });
 
     els.resetBtn.addEventListener("click", () => {
+        if (consumeAlarmClick()) return;
         stopTicking();
-        cancelEndNotif();
+        cancelAllNotifs();
+        stopPersistentAlarm();
         state.running = false;
         state.paused = false;
         state.mode = "work";
         state.workSessionsCompleted = 0;
         state.activeProfile = null;
         resetTimerFromProfile();
+    });
+
+    attachDismissHold(els.startBtn);
+    attachDismissHold(els.pauseBtn);
+    attachDismissHold(els.resetBtn);
+
+    els.newProfileBtn.addEventListener("click", () => {
+        creatingNew = true;
+        els.nameInput.value = "New profile";
+        els.workInput.value = "25";
+        els.shortBreakInput.value = "5";
+        els.longEveryInput.value = "4";
+        els.longBreakInput.value = "15";
+        els.nameInput.focus();
+        els.nameInput.select();
+        setMessage("Fill in values and click Save profile to add it.");
     });
 
     els.saveProfileBtn.addEventListener("click", () => {
@@ -471,14 +622,41 @@ function bindEvents() {
             return;
         }
 
-        const existingIndex = profiles.findIndex(
-            (item) => item.name === profile.name
-        );
-
-        if (existingIndex >= 0) {
-            profiles[existingIndex] = profile;
-        } else {
+        if (creatingNew) {
+            if (profiles.some((item) => item.name === profile.name)) {
+                setMessage("A profile with that name already exists.");
+                return;
+            }
             profiles.push(profile);
+            creatingNew = false;
+        } else {
+            const selectedName = els.profileSelect.value;
+            const currentIndex = profiles.findIndex(
+                (item) => item.name === selectedName
+            );
+            if (currentIndex < 0) {
+                if (profiles.some((item) => item.name === profile.name)) {
+                    setMessage("A profile with that name already exists.");
+                    return;
+                }
+                profiles.push(profile);
+            } else {
+                if (
+                    profile.name !== selectedName &&
+                    profiles.some((item) => item.name === profile.name)
+                ) {
+                    setMessage("Another profile already has that name.");
+                    return;
+                }
+                const oldName = profiles[currentIndex].name;
+                profiles[currentIndex] = profile;
+                if (state.activeProfile && state.activeProfile.name === oldName) {
+                    state.activeProfile = profile;
+                    if (state.running) {
+                        rescheduleNotifsForActive();
+                    }
+                }
+            }
         }
 
         populateProfileSelect(profile.name);
@@ -487,7 +665,7 @@ function bindEvents() {
             [STORAGE_KEYS.selectedProfile]: profile.name,
         });
 
-        if (!state.running) {
+        if (!state.running && !state.paused) {
             resetTimerFromProfile();
         }
 
@@ -500,6 +678,7 @@ function bindEvents() {
             return;
         }
 
+        creatingNew = false;
         const name = els.profileSelect.value;
         profiles = profiles.filter((profile) => profile.name !== name);
         const next = profiles[0];
@@ -511,7 +690,7 @@ function bindEvents() {
             [STORAGE_KEYS.selectedProfile]: next.name,
         });
 
-        if (!state.running) {
+        if (!state.running && !state.paused) {
             resetTimerFromProfile();
         }
 
@@ -526,6 +705,7 @@ function bindEvents() {
             return;
         }
 
+        creatingNew = false;
         profiles = [...DEFAULT_PROFILES];
         const active = profiles[0];
 
@@ -536,7 +716,7 @@ function bindEvents() {
             [STORAGE_KEYS.selectedProfile]: active.name,
         });
 
-        if (!state.running) {
+        if (!state.running && !state.paused) {
             resetTimerFromProfile();
         }
 
@@ -545,10 +725,7 @@ function bindEvents() {
 
     document.addEventListener("visibilitychange", () => {
         if (state.running) {
-            state.remainingMs = Math.max(0, state.endTime - Date.now());
-            if (state.remainingMs <= 0) {
-                completeSession();
-            }
+            catchUp();
         }
         updateTimerDisplay();
     });
@@ -558,6 +735,16 @@ async function init() {
     const LN = getLN();
     if (LN) {
         try { await LN.requestPermissions(); } catch (e) {}
+        try {
+            await LN.createChannel({
+                id: NOTIF_CHANNEL_ID,
+                name: "Pomodoro",
+                description: "Session end alerts",
+                importance: 4,
+                sound: "default",
+                vibration: true,
+            });
+        } catch (e) {}
     }
     await loadStorage();
     bindEvents();

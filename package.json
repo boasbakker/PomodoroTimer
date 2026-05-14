@@ -1,8 +1,7 @@
 {
   "name": "pomodoro_timer",
   "version": "1.0.0",
-  "description": "A Pomodoro timer browser extension for Zen (Firefox-based). It keeps a permanent, pinned tab in position #1 in every normal window.",
-  "main": "background.js",
+  "description": "Zen Pomodoro: a browser extension + Android app sharing one web UI.",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
