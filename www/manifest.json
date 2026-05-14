@@ -2,13 +2,14 @@
     "manifest_version": 3,
     "name": "Zen Pomodoro Tab",
     "version": "1.0.0",
-    "description": "A permanent Pomodoro timer tab that stays pinned and first.",
+    "description": "A permanent Pomodoro timer tab that stays pinned at the end of the pinned list.",
     "permissions": [
         "tabs",
         "storage"
     ],
     "background": {
-        "service_worker": "background.js"
+        "service_worker": "background.js",
+        "scripts": ["background.js"]
     },
     "icons": {
         "48": "icons/icon.svg",

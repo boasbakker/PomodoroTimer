@@ -22,10 +22,6 @@
                     <span class="stat-label">Sessions</span>
                     <span id="todayCount" class="stat-value">0</span>
                 </div>
-                <label class="toggle">
-                    <span>Sound</span>
-                    <input id="soundToggle" type="checkbox" />
-                </label>
             </div>
         </header>
 
@@ -41,45 +37,67 @@
                 <button id="startBtn" class="btn primary">Start</button>
                 <button id="pauseBtn" class="btn">Pause</button>
                 <button id="resetBtn" class="btn ghost">Reset</button>
+                <button id="alarmStartBtn" class="btn primary alarm-cta hold-btn" hidden>
+                    <span class="hold-btn-label">Hold to start Work</span>
+                </button>
             </div>
             <p id="messageLine" class="message" aria-live="polite"></p>
         </section>
 
         <section class="profile-card">
-            <div class="grid">
-                <label class="field">
-                    <span>Profile</span>
-                    <select id="profileSelect"></select>
-                </label>
+            <header class="profile-header">
+                <h2>Profiles</h2>
+                <button id="newProfileBtn" class="btn primary">+ New profile</button>
+            </header>
+            <ul id="profileList" class="profile-list"></ul>
+            <div class="profile-footer">
+                <button id="defaultsBtn" class="btn ghost">Restore defaults</button>
+            </div>
+        </section>
+    </main>
+
+    <div id="profileModal" class="modal" hidden aria-modal="true" role="dialog" aria-labelledby="modalTitle">
+        <div class="modal-backdrop" data-close></div>
+        <div class="modal-card">
+            <header class="modal-header">
+                <h3 id="modalTitle">Edit profile</h3>
+                <button class="modal-close" data-close aria-label="Close">&times;</button>
+            </header>
+            <div class="modal-body">
                 <label class="field">
                     <span>Name</span>
                     <input id="nameInput" type="text" />
                 </label>
-                <label class="field">
-                    <span>Work (min)</span>
-                    <input id="workInput" type="number" min="1" />
-                </label>
-                <label class="field">
-                    <span>Short break (min)</span>
-                    <input id="shortBreakInput" type="number" min="1" />
-                </label>
-                <label class="field">
-                    <span>Long break every</span>
-                    <input id="longEveryInput" type="number" min="1" />
-                </label>
-                <label class="field">
-                    <span>Long break (min)</span>
-                    <input id="longBreakInput" type="number" min="1" />
-                </label>
+                <div class="field-grid">
+                    <label class="field">
+                        <span>Work (min)</span>
+                        <input id="workInput" type="number" min="1" />
+                    </label>
+                    <label class="field">
+                        <span>Short break (min)</span>
+                        <input id="shortBreakInput" type="number" min="1" />
+                    </label>
+                    <label class="field">
+                        <span>Long break every</span>
+                        <input id="longEveryInput" type="number" min="1" />
+                    </label>
+                    <label class="field">
+                        <span>Long break (min)</span>
+                        <input id="longBreakInput" type="number" min="1" />
+                    </label>
+                </div>
+                <p id="modalError" class="modal-error" aria-live="polite"></p>
             </div>
-            <div class="controls">
-                <button id="newProfileBtn" class="btn">New profile</button>
-                <button id="saveProfileBtn" class="btn">Save profile</button>
-                <button id="deleteProfileBtn" class="btn ghost">Delete profile</button>
-                <button id="defaultsBtn" class="btn ghost">Defaults</button>
-            </div>
-        </section>
-    </main>
+            <footer class="modal-footer">
+                <button id="modalDeleteBtn" class="btn ghost hold-btn danger" hidden>
+                    <span class="hold-btn-label">Hold to delete</span>
+                </button>
+                <span class="modal-spacer"></span>
+                <button id="modalCancelBtn" class="btn ghost" data-close>Cancel</button>
+                <button id="modalSaveBtn" class="btn primary">Save</button>
+            </footer>
+        </div>
+    </div>
 
     <script src="tab.js"></script>
 </body>

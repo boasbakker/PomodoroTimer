@@ -8,8 +8,19 @@ async function enforcePomodoroTab(tabId) {
         return;
     }
 
+    let pinnedCount = 0;
     try {
-        await api.tabs.move(tabId, { index: 0 });
+        const self = await api.tabs.get(tabId);
+        const windowTabs = await api.tabs.query({ windowId: self.windowId });
+        pinnedCount = windowTabs.filter((tab) => tab.pinned).length;
+    } catch (error) {
+        return;
+    }
+
+    const targetIndex = Math.max(0, pinnedCount - 1);
+
+    try {
+        await api.tabs.move(tabId, { index: targetIndex });
     } catch (error) {
         return;
     }

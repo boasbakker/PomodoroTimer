@@ -95,7 +95,7 @@ const STORAGE_KEYS = {
     profiles: "profiles",
     selectedProfile: "selectedProfile",
     stats: "stats",
-    soundEnabled: "soundEnabled",
+    timerState: "timerState",
 };
 
 const state = {
@@ -106,12 +106,12 @@ const state = {
     remainingMs: 0,
     endTime: 0,
     activeProfile: null,
+    awaitingDismissal: false,
 };
 
 const els = {
     todayLine: document.getElementById("todayLine"),
     todayCount: document.getElementById("todayCount"),
-    soundToggle: document.getElementById("soundToggle"),
     modeLabel: document.getElementById("modeLabel"),
     timeLeft: document.getElementById("timeLeft"),
     statusLine: document.getElementById("statusLine"),
@@ -120,28 +120,34 @@ const els = {
     startBtn: document.getElementById("startBtn"),
     pauseBtn: document.getElementById("pauseBtn"),
     resetBtn: document.getElementById("resetBtn"),
-    profileSelect: document.getElementById("profileSelect"),
+    alarmStartBtn: document.getElementById("alarmStartBtn"),
+    profileList: document.getElementById("profileList"),
+    newProfileBtn: document.getElementById("newProfileBtn"),
+    defaultsBtn: document.getElementById("defaultsBtn"),
+    profileModal: document.getElementById("profileModal"),
+    modalTitle: document.getElementById("modalTitle"),
+    modalError: document.getElementById("modalError"),
+    modalSaveBtn: document.getElementById("modalSaveBtn"),
+    modalCancelBtn: document.getElementById("modalCancelBtn"),
+    modalDeleteBtn: document.getElementById("modalDeleteBtn"),
     nameInput: document.getElementById("nameInput"),
     workInput: document.getElementById("workInput"),
     shortBreakInput: document.getElementById("shortBreakInput"),
     longEveryInput: document.getElementById("longEveryInput"),
     longBreakInput: document.getElementById("longBreakInput"),
-    newProfileBtn: document.getElementById("newProfileBtn"),
-    saveProfileBtn: document.getElementById("saveProfileBtn"),
-    deleteProfileBtn: document.getElementById("deleteProfileBtn"),
-    defaultsBtn: document.getElementById("defaultsBtn"),
 };
 
 let profiles = [];
 let stats = {};
-let soundEnabled = true;
 let tickTimer = null;
 let audioContext = null;
 
 let alarmActive = false;
 let alarmInterval = null;
-let suppressNextClick = false;
-let creatingNew = false;
+
+let selectedProfileName = null;
+let modalMode = null;
+let modalEditingName = null;
 
 function formatTime(ms) {
     const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
@@ -239,17 +245,56 @@ function loadProfileFields(profile) {
     els.longBreakInput.value = String(profile.longBreakMin);
 }
 
-function populateProfileSelect(selectedName) {
-    els.profileSelect.innerHTML = "";
+function renderProfileList() {
+    els.profileList.innerHTML = "";
     for (const profile of profiles) {
-        const option = document.createElement("option");
-        option.value = profile.name;
-        option.textContent = profile.name;
-        if (profile.name === selectedName) {
-            option.selected = true;
+        const li = document.createElement("li");
+        li.className = "profile-list-item";
+        if (profile.name === selectedProfileName) {
+            li.classList.add("selected");
         }
-        els.profileSelect.appendChild(option);
+
+        const info = document.createElement("div");
+        info.className = "profile-info";
+
+        const name = document.createElement("div");
+        name.className = "profile-name";
+        name.textContent = profile.name;
+
+        const summary = document.createElement("div");
+        summary.className = "profile-summary";
+        summary.textContent = `${profile.workMin} / ${profile.shortBreakMin} / ${profile.longBreakMin} min · long every ${profile.longBreakEvery}`;
+
+        info.appendChild(name);
+        info.appendChild(summary);
+
+        const editBtn = document.createElement("button");
+        editBtn.className = "btn ghost profile-edit-btn";
+        editBtn.type = "button";
+        editBtn.textContent = "Edit";
+        editBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openProfileModal("edit", profile);
+        });
+
+        li.appendChild(info);
+        li.appendChild(editBtn);
+
+        li.addEventListener("click", () => {
+            selectProfile(profile.name);
+        });
+
+        els.profileList.appendChild(li);
     }
+}
+
+function selectProfile(name) {
+    const profile = profiles.find((p) => p.name === name);
+    if (!profile) return;
+    selectedProfileName = name;
+    api.storage.local.set({ [STORAGE_KEYS.selectedProfile]: name });
+    resetTimer();
+    renderProfileList();
 }
 
 function updateStatsDisplay() {
@@ -264,8 +309,12 @@ function updateStatsDisplay() {
     });
 }
 
+function getSelectedProfile() {
+    return profiles.find((p) => p.name === selectedProfileName) || profiles[0] || null;
+}
+
 function updateTimerDisplay() {
-    const profile = state.activeProfile || getProfileFromFields();
+    const profile = state.activeProfile || getSelectedProfile();
     const total = getDurationMs(profile, state.mode);
     const remaining = state.remainingMs;
     const progress = total > 0 ? Math.min(1, Math.max(0, 1 - remaining / total)) : 0;
@@ -275,7 +324,9 @@ function updateTimerDisplay() {
     els.progressRing.style.setProperty("--progress", progress.toFixed(4));
 
     let status = "Ready";
-    if (state.running) {
+    if (state.awaitingDismissal) {
+        status = "Alarm";
+    } else if (state.running) {
         status = "Running";
     } else if (state.paused) {
         status = "Paused";
@@ -285,8 +336,8 @@ function updateTimerDisplay() {
     document.title = `${formatTime(remaining)} - ${modeLabel(state.mode)}`;
 }
 
-function resetTimerFromProfile() {
-    const profile = getProfileFromFields();
+function resetTimerFromSelected() {
+    const profile = getSelectedProfile();
     if (!profile) {
         state.remainingMs = 0;
         state.mode = "work";
@@ -296,6 +347,20 @@ function resetTimerFromProfile() {
     state.remainingMs = getDurationMs(profile, "work");
     state.mode = "work";
     updateTimerDisplay();
+}
+
+function resetTimer() {
+    stopTicking();
+    cancelAllNotifs();
+    state.awaitingDismissal = false;
+    stopPersistentAlarm();
+    state.running = false;
+    state.paused = false;
+    state.mode = "work";
+    state.activeProfile = null;
+    state.endTime = 0;
+    resetTimerFromSelected();
+    persistState();
 }
 
 function stopTicking() {
@@ -337,9 +402,6 @@ async function ensureAudioContext() {
 }
 
 function playAlarm() {
-    if (!soundEnabled) {
-        return;
-    }
     if (!audioContext) {
         return;
     }
@@ -372,7 +434,15 @@ function startPersistentAlarm() {
     alarmActive = true;
     playAlarm();
     alarmInterval = setInterval(playAlarm, 1500);
-    setMessage("Hold any button for 3 s to dismiss the alarm.");
+    setMessage("");
+    els.startBtn.hidden = true;
+    els.pauseBtn.hidden = true;
+    els.resetBtn.hidden = true;
+    const label = els.alarmStartBtn.querySelector(".hold-btn-label");
+    if (label) {
+        label.textContent = `Hold to start ${modeLabel(state.mode)}`;
+    }
+    els.alarmStartBtn.hidden = false;
 }
 
 function stopPersistentAlarm() {
@@ -385,6 +455,37 @@ function stopPersistentAlarm() {
         alarmInterval = null;
     }
     setMessage("");
+
+    els.alarmStartBtn.hidden = true;
+    els.startBtn.hidden = false;
+    els.pauseBtn.hidden = false;
+    els.resetBtn.hidden = false;
+
+    if (state.awaitingDismissal) {
+        state.awaitingDismissal = false;
+        if (state.running && state.activeProfile) {
+            state.endTime = Date.now() + getDurationMs(state.activeProfile, state.mode);
+            state.remainingMs = state.endTime - Date.now();
+            rescheduleNotifsForActive();
+        }
+        persistState();
+        updateTimerDisplay();
+    }
+}
+
+function persistState() {
+    api.storage.local.set({
+        [STORAGE_KEYS.timerState]: {
+            running: state.running,
+            paused: state.paused,
+            mode: state.mode,
+            workSessionsCompleted: state.workSessionsCompleted,
+            remainingMs: state.remainingMs,
+            endTime: state.endTime,
+            activeProfileName: state.activeProfile ? state.activeProfile.name : null,
+            awaitingDismissal: state.awaitingDismissal,
+        },
+    });
 }
 
 function incrementStats() {
@@ -406,7 +507,7 @@ function transitionInPlace(profile) {
     } else {
         state.mode = "work";
     }
-    state.endTime += getDurationMs(profile, state.mode);
+    persistState();
 }
 
 function catchUp() {
@@ -417,20 +518,23 @@ function catchUp() {
     if (!profile) {
         state.running = false;
         state.paused = false;
-        resetTimerFromProfile();
+        resetTimerFromSelected();
+        return;
+    }
+    if (state.awaitingDismissal) {
+        state.remainingMs = getDurationMs(profile, state.mode);
         return;
     }
     const now = Date.now();
-    let transitioned = false;
-    while (now >= state.endTime) {
+    if (now >= state.endTime) {
         transitionInPlace(profile);
-        transitioned = true;
+        state.awaitingDismissal = true;
+        state.remainingMs = getDurationMs(profile, state.mode);
+        cancelAllNotifs();
+        startPersistentAlarm();
+        return;
     }
     state.remainingMs = Math.max(0, state.endTime - now);
-    if (transitioned) {
-        startPersistentAlarm();
-        rescheduleNotifsForActive();
-    }
 }
 
 function rescheduleNotifsForActive() {
@@ -444,93 +548,202 @@ function rescheduleNotifsForActive() {
     scheduleNotifs(state.endTime, state.mode, nextEnd, nextMode);
 }
 
+function attachHoldGesture(button, onComplete, durationMs = 3000) {
+    let timerId = null;
+    let activePointerId = null;
+
+    const start = (e) => {
+        if (activePointerId !== null) return;
+        if (button.disabled || button.hidden) return;
+        if (e.pointerId !== undefined) {
+            activePointerId = e.pointerId;
+            try { button.setPointerCapture(e.pointerId); } catch (_) {}
+        }
+        button.classList.add("holding");
+        timerId = setTimeout(() => {
+            timerId = null;
+            activePointerId = null;
+            button.classList.remove("holding");
+            button.classList.add("completed");
+            setTimeout(() => button.classList.remove("completed"), 260);
+            onComplete();
+        }, durationMs);
+    };
+
+    const cancel = () => {
+        if (timerId) {
+            clearTimeout(timerId);
+            timerId = null;
+        }
+        button.classList.remove("holding");
+        activePointerId = null;
+    };
+
+    button.addEventListener("pointerdown", start);
+    button.addEventListener("pointerup", cancel);
+    button.addEventListener("pointerleave", cancel);
+    button.addEventListener("pointercancel", cancel);
+}
+
+function openProfileModal(mode, profile) {
+    modalMode = mode;
+    modalEditingName = mode === "edit" && profile ? profile.name : null;
+    els.modalTitle.textContent = mode === "edit" ? "Edit profile" : "New profile";
+    els.modalError.textContent = "";
+    els.modalDeleteBtn.hidden = !(mode === "edit" && profiles.length > 1);
+
+    const source = profile || {
+        name: "New profile",
+        workMin: 25,
+        shortBreakMin: 5,
+        longBreakEvery: 4,
+        longBreakMin: 15,
+    };
+    loadProfileFields(source);
+
+    els.profileModal.hidden = false;
+    setTimeout(() => {
+        els.nameInput.focus();
+        els.nameInput.select();
+    }, 0);
+}
+
+function closeProfileModal() {
+    els.profileModal.hidden = true;
+    modalMode = null;
+    modalEditingName = null;
+    els.modalError.textContent = "";
+}
+
+function saveFromModal() {
+    const profile = getProfileFromFields();
+    if (!profile) {
+        els.modalError.textContent = "Please enter a name and positive numbers.";
+        return;
+    }
+
+    if (modalMode === "create") {
+        if (profiles.some((item) => item.name === profile.name)) {
+            els.modalError.textContent = "A profile with that name already exists.";
+            return;
+        }
+        profiles.push(profile);
+    } else {
+        const currentIndex = profiles.findIndex((item) => item.name === modalEditingName);
+        if (currentIndex < 0) {
+            els.modalError.textContent = "Profile not found.";
+            return;
+        }
+        if (
+            profile.name !== modalEditingName &&
+            profiles.some((item) => item.name === profile.name)
+        ) {
+            els.modalError.textContent = "Another profile already has that name.";
+            return;
+        }
+        profiles[currentIndex] = profile;
+    }
+
+    selectedProfileName = profile.name;
+
+    api.storage.local.set({
+        [STORAGE_KEYS.profiles]: profiles,
+        [STORAGE_KEYS.selectedProfile]: selectedProfileName,
+    });
+
+    resetTimer();
+
+    renderProfileList();
+    closeProfileModal();
+}
+
+function deleteFromModal() {
+    if (modalMode !== "edit" || !modalEditingName) return;
+    if (profiles.length <= 1) return;
+
+    const name = modalEditingName;
+    profiles = profiles.filter((profile) => profile.name !== name);
+
+    if (selectedProfileName === name) {
+        selectedProfileName = profiles[0].name;
+    }
+    if (state.activeProfile && state.activeProfile.name === name) {
+        state.activeProfile = profiles[0];
+        if (state.running) {
+            rescheduleNotifsForActive();
+        }
+    }
+
+    api.storage.local.set({
+        [STORAGE_KEYS.profiles]: profiles,
+        [STORAGE_KEYS.selectedProfile]: selectedProfileName,
+    });
+
+    if (!state.running && !state.paused) {
+        resetTimerFromSelected();
+    }
+
+    renderProfileList();
+    closeProfileModal();
+}
+
 async function loadStorage() {
     const result = await api.storage.local.get([
         STORAGE_KEYS.profiles,
         STORAGE_KEYS.selectedProfile,
         STORAGE_KEYS.stats,
-        STORAGE_KEYS.soundEnabled,
+        STORAGE_KEYS.timerState,
     ]);
 
-    profiles = Array.isArray(result[STORAGE_KEYS.profiles])
+    profiles = Array.isArray(result[STORAGE_KEYS.profiles]) && result[STORAGE_KEYS.profiles].length > 0
         ? result[STORAGE_KEYS.profiles]
-        : DEFAULT_PROFILES;
+        : [...DEFAULT_PROFILES];
 
-    const selectedName = result[STORAGE_KEYS.selectedProfile] || profiles[0].name;
+    selectedProfileName = result[STORAGE_KEYS.selectedProfile] || profiles[0].name;
+    if (!profiles.some((p) => p.name === selectedProfileName)) {
+        selectedProfileName = profiles[0].name;
+    }
     stats = result[STORAGE_KEYS.stats] || {};
-    soundEnabled = result[STORAGE_KEYS.soundEnabled] ?? true;
 
-    populateProfileSelect(selectedName);
-
-    const active = profiles.find((profile) => profile.name === selectedName) || profiles[0];
-    loadProfileFields(active);
-    resetTimerFromProfile();
-    updateStatsDisplay();
-    els.soundToggle.checked = soundEnabled;
-}
-
-function attachDismissHold(btn) {
-    let holdTimer = null;
-    const cancel = () => {
-        if (holdTimer) {
-            clearTimeout(holdTimer);
-            holdTimer = null;
+    const saved = result[STORAGE_KEYS.timerState];
+    let resumed = false;
+    if (saved && typeof saved === "object") {
+        state.workSessionsCompleted = Number(saved.workSessionsCompleted) || 0;
+        const savedProfile = saved.activeProfileName
+            ? profiles.find((p) => p.name === saved.activeProfileName)
+            : null;
+        if (savedProfile && (saved.running || saved.paused || saved.awaitingDismissal)) {
+            state.activeProfile = savedProfile;
+            state.mode = saved.mode || "work";
+            state.endTime = Number(saved.endTime) || 0;
+            state.remainingMs = Number(saved.remainingMs) || 0;
+            state.awaitingDismissal = !!saved.awaitingDismissal;
+            state.paused = !!saved.paused;
+            state.running = !!saved.running;
+            resumed = true;
         }
-    };
-    btn.addEventListener("pointerdown", () => {
-        if (!alarmActive) return;
-        cancel();
-        holdTimer = setTimeout(() => {
-            holdTimer = null;
-            suppressNextClick = true;
-            stopPersistentAlarm();
-        }, 3000);
-    });
-    btn.addEventListener("pointerup", cancel);
-    btn.addEventListener("pointerleave", cancel);
-    btn.addEventListener("pointercancel", cancel);
-}
+    }
 
-function consumeAlarmClick() {
-    if (suppressNextClick) {
-        suppressNextClick = false;
-        return true;
+    renderProfileList();
+
+    if (resumed) {
+        if (state.running) {
+            catchUp();
+            if (state.running) {
+                startTicking();
+            }
+        } else if (state.awaitingDismissal) {
+            startPersistentAlarm();
+        }
+        updateTimerDisplay();
+    } else {
+        resetTimerFromSelected();
     }
-    if (alarmActive) {
-        return true;
-    }
-    return false;
+    updateStatsDisplay();
 }
 
 function bindEvents() {
-    els.profileSelect.addEventListener("change", () => {
-        creatingNew = false;
-        const selected = profiles.find(
-            (profile) => profile.name === els.profileSelect.value
-        );
-        loadProfileFields(selected);
-        api.storage.local.set({
-            [STORAGE_KEYS.selectedProfile]: els.profileSelect.value,
-        });
-        if (state.running || state.paused) {
-            if (selected) {
-                state.activeProfile = selected;
-                if (state.running) {
-                    rescheduleNotifsForActive();
-                }
-            }
-        } else {
-            resetTimerFromProfile();
-        }
-    });
-
-    els.soundToggle.addEventListener("change", () => {
-        soundEnabled = els.soundToggle.checked;
-        api.storage.local.set({ [STORAGE_KEYS.soundEnabled]: soundEnabled });
-    });
-
     els.startBtn.addEventListener("click", async () => {
-        if (consumeAlarmClick()) return;
         setMessage("");
         await ensureAudioContext();
 
@@ -544,19 +757,19 @@ function bindEvents() {
             state.endTime = Date.now() + state.remainingMs;
             rescheduleNotifsForActive();
             startTicking();
+            persistState();
             updateTimerDisplay();
             return;
         }
 
-        const profile = getProfileFromFields();
+        const profile = getSelectedProfile();
         if (!profile) {
-            setMessage("Please enter valid profile values first.");
+            setMessage("Create a profile first.");
             return;
         }
 
         state.activeProfile = profile;
         state.mode = "work";
-        state.workSessionsCompleted = 0;
         state.remainingMs = getDurationMs(profile, "work");
         state.endTime = Date.now() + state.remainingMs;
         state.running = true;
@@ -564,11 +777,11 @@ function bindEvents() {
 
         rescheduleNotifsForActive();
         startTicking();
+        persistState();
         updateTimerDisplay();
     });
 
     els.pauseBtn.addEventListener("click", () => {
-        if (consumeAlarmClick()) return;
         if (!state.running) {
             return;
         }
@@ -583,119 +796,37 @@ function bindEvents() {
         state.paused = true;
         stopTicking();
         cancelAllNotifs();
+        persistState();
         updateTimerDisplay();
     });
 
     els.resetBtn.addEventListener("click", () => {
-        if (consumeAlarmClick()) return;
-        stopTicking();
-        cancelAllNotifs();
-        stopPersistentAlarm();
-        state.running = false;
-        state.paused = false;
-        state.mode = "work";
-        state.workSessionsCompleted = 0;
-        state.activeProfile = null;
-        resetTimerFromProfile();
+        resetTimer();
     });
 
-    attachDismissHold(els.startBtn);
-    attachDismissHold(els.pauseBtn);
-    attachDismissHold(els.resetBtn);
+    attachHoldGesture(els.alarmStartBtn, () => stopPersistentAlarm());
 
     els.newProfileBtn.addEventListener("click", () => {
-        creatingNew = true;
-        els.nameInput.value = "New profile";
-        els.workInput.value = "25";
-        els.shortBreakInput.value = "5";
-        els.longEveryInput.value = "4";
-        els.longBreakInput.value = "15";
-        els.nameInput.focus();
-        els.nameInput.select();
-        setMessage("Fill in values and click Save profile to add it.");
+        openProfileModal("create", null);
     });
 
-    els.saveProfileBtn.addEventListener("click", () => {
-        const profile = getProfileFromFields();
-        if (!profile) {
-            setMessage("Please enter a name and positive numbers.");
-            return;
+    els.modalSaveBtn.addEventListener("click", saveFromModal);
+    els.modalCancelBtn.addEventListener("click", closeProfileModal);
+
+    els.profileModal.addEventListener("click", (e) => {
+        const target = e.target;
+        if (target instanceof Element && target.hasAttribute("data-close")) {
+            closeProfileModal();
         }
-
-        if (creatingNew) {
-            if (profiles.some((item) => item.name === profile.name)) {
-                setMessage("A profile with that name already exists.");
-                return;
-            }
-            profiles.push(profile);
-            creatingNew = false;
-        } else {
-            const selectedName = els.profileSelect.value;
-            const currentIndex = profiles.findIndex(
-                (item) => item.name === selectedName
-            );
-            if (currentIndex < 0) {
-                if (profiles.some((item) => item.name === profile.name)) {
-                    setMessage("A profile with that name already exists.");
-                    return;
-                }
-                profiles.push(profile);
-            } else {
-                if (
-                    profile.name !== selectedName &&
-                    profiles.some((item) => item.name === profile.name)
-                ) {
-                    setMessage("Another profile already has that name.");
-                    return;
-                }
-                const oldName = profiles[currentIndex].name;
-                profiles[currentIndex] = profile;
-                if (state.activeProfile && state.activeProfile.name === oldName) {
-                    state.activeProfile = profile;
-                    if (state.running) {
-                        rescheduleNotifsForActive();
-                    }
-                }
-            }
-        }
-
-        populateProfileSelect(profile.name);
-        api.storage.local.set({
-            [STORAGE_KEYS.profiles]: profiles,
-            [STORAGE_KEYS.selectedProfile]: profile.name,
-        });
-
-        if (!state.running && !state.paused) {
-            resetTimerFromProfile();
-        }
-
-        setMessage("Profile saved.");
     });
 
-    els.deleteProfileBtn.addEventListener("click", () => {
-        if (profiles.length <= 1) {
-            setMessage("Keep at least one profile.");
-            return;
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !els.profileModal.hidden) {
+            closeProfileModal();
         }
-
-        creatingNew = false;
-        const name = els.profileSelect.value;
-        profiles = profiles.filter((profile) => profile.name !== name);
-        const next = profiles[0];
-
-        populateProfileSelect(next.name);
-        loadProfileFields(next);
-        api.storage.local.set({
-            [STORAGE_KEYS.profiles]: profiles,
-            [STORAGE_KEYS.selectedProfile]: next.name,
-        });
-
-        if (!state.running && !state.paused) {
-            resetTimerFromProfile();
-        }
-
-        setMessage("Profile deleted.");
     });
+
+    attachHoldGesture(els.modalDeleteBtn, deleteFromModal);
 
     els.defaultsBtn.addEventListener("click", () => {
         const confirmReset = window.confirm(
@@ -705,21 +836,19 @@ function bindEvents() {
             return;
         }
 
-        creatingNew = false;
         profiles = [...DEFAULT_PROFILES];
-        const active = profiles[0];
+        selectedProfileName = profiles[0].name;
 
-        populateProfileSelect(active.name);
-        loadProfileFields(active);
         api.storage.local.set({
             [STORAGE_KEYS.profiles]: profiles,
-            [STORAGE_KEYS.selectedProfile]: active.name,
+            [STORAGE_KEYS.selectedProfile]: selectedProfileName,
         });
 
         if (!state.running && !state.paused) {
-            resetTimerFromProfile();
+            resetTimerFromSelected();
         }
 
+        renderProfileList();
         setMessage("Defaults restored.");
     });
 
