@@ -400,6 +400,88 @@ h1 {
     border-color: rgba(10, 122, 106, 0.45);
 }
 
+.field-label-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.field-label-row label {
+    cursor: pointer;
+}
+
+.info-btn {
+    position: relative;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 1px solid rgba(27, 36, 40, 0.35);
+    background: rgba(255, 255, 255, 0.6);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    font-family: "Trebuchet MS", "Gill Sans", "Gill Sans MT", sans-serif;
+    font-style: italic;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: help;
+    padding: 0;
+    flex-shrink: 0;
+    box-shadow: none;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.info-btn:hover,
+.info-btn:focus-visible {
+    background: rgba(27, 36, 40, 0.1);
+    color: var(--ink);
+    outline: none;
+}
+
+.info-tooltip {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    width: max-content;
+    max-width: 220px;
+    background: var(--ink);
+    color: #ffffff;
+    padding: 9px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 400;
+    font-style: normal;
+    line-height: 1.45;
+    font-family: "Trebuchet MS", "Gill Sans", "Gill Sans MT", sans-serif;
+    letter-spacing: normal;
+    text-align: left;
+    white-space: normal;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s ease, visibility 0.15s ease;
+    z-index: 10;
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+}
+
+.info-tooltip::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 8px;
+    border: 5px solid transparent;
+    border-top-color: var(--ink);
+}
+
+.info-btn:hover .info-tooltip,
+.info-btn:focus-visible .info-tooltip,
+.info-btn.info-open .info-tooltip {
+    opacity: 1;
+    visibility: visible;
+}
+
 .modal {
     position: fixed;
     inset: 0;

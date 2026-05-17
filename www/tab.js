@@ -69,28 +69,19 @@ async function cancelAllNotifs() {
 
 const DEFAULT_PROFILES = [
     {
-        name: "Classic 25/5/15",
+        name: "Classic 25/3/25",
         topText: "Customizable Pomodoro timer",
         workMin: 25,
-        shortBreakMin: 5,
+        shortBreakMin: 3,
         longBreakEvery: 4,
-        longBreakMin: 15,
+        longBreakMin: 25,
         alarmHoldSec: 3,
     },
     {
-        name: "Deep 50/10/20",
+        name: "Deep 50/6/25",
         topText: "Customizable Pomodoro timer",
         workMin: 50,
-        shortBreakMin: 10,
-        longBreakEvery: 3,
-        longBreakMin: 20,
-        alarmHoldSec: 3,
-    },
-    {
-        name: "WLG",
-        topText: "Customizable Pomodoro timer",
-        workMin: 65,
-        shortBreakMin: 5,
+        shortBreakMin: 6,
         longBreakEvery: 2,
         longBreakMin: 25,
         alarmHoldSec: 3,
@@ -100,9 +91,23 @@ const DEFAULT_PROFILES = [
 const STORAGE_KEYS = {
     profiles: "profiles",
     selectedProfile: "selectedProfile",
-    stats: "stats",
     timerState: "timerState",
+    plusOneTokens: "plusOneTokens",
+    totalWorkMs: "totalWorkMs",
 };
+
+const IDLE_NUDGE_MS = 60_000;
+const IDLE_NUDGE_PEAK_GAIN = 0.10;
+
+const ALARM_RAMP_FRACTION = 0.10;
+const ALARM_PEAK_GAIN_MIN = 0.04;
+const ALARM_PEAK_GAIN_MAX = 0.20;
+
+const PLUS_ONE_BASE_TOKENS = 4;
+const PLUS_ONE_DAILY_BUDGET = 18 * PLUS_ONE_BASE_TOKENS;
+const PLUS_ONE_COST_ALARM = 2 * PLUS_ONE_BASE_TOKENS;
+const PLUS_ONE_COST_BREAK = PLUS_ONE_BASE_TOKENS / 4;
+const PLUS_ONE_ADD_MS = 60_000;
 
 const state = {
     running: false,
@@ -113,12 +118,20 @@ const state = {
     endTime: 0,
     activeProfile: null,
     awaitingDismissal: false,
+    extensionMs: 0,
+    workSegmentStart: null,
+    alarmRampStartTime: 0,
+    alarmRampDurationMs: 0,
 };
+
+let totalWorkMs = 0;
+
+let plusOneState = { date: null, tokens: PLUS_ONE_DAILY_BUDGET };
 
 const els = {
     topTextDisplay: document.getElementById("topTextDisplay"),
     todayLine: document.getElementById("todayLine"),
-    todayCount: document.getElementById("todayCount"),
+    workedTotal: document.getElementById("workedTotal"),
     modeLabel: document.getElementById("modeLabel"),
     timeLeft: document.getElementById("timeLeft"),
     statusLine: document.getElementById("statusLine"),
@@ -128,6 +141,8 @@ const els = {
     resetBtn: document.getElementById("resetBtn"),
     resetLabel: document.querySelector("#resetBtn .hold-btn-label"),
     shorterBtn: document.getElementById("shorterBtn"),
+    plusOneBtn: document.getElementById("plusOneBtn"),
+    plusOneRemaining: document.getElementById("plusOneRemaining"),
     alarmStartBtn: document.getElementById("alarmStartBtn"),
     confirmModal: document.getElementById("confirmModal"),
     confirmTitle: document.getElementById("confirmTitle"),
@@ -150,15 +165,20 @@ const els = {
     longEveryInput: document.getElementById("longEveryInput"),
     longBreakInput: document.getElementById("longBreakInput"),
     alarmHoldInput: document.getElementById("alarmHoldInput"),
+    longEveryInfo: document.getElementById("longEveryInfo"),
 };
 
 let profiles = [];
-let stats = {};
 let tickTimer = null;
 let audioContext = null;
 
 let alarmActive = false;
 let alarmInterval = null;
+let alarmVibrationInterval = null;
+let titleFlashInterval = null;
+let titleFlashOn = false;
+let audioPrimerInstalled = false;
+let idleNudgeInterval = null;
 
 let selectedProfileName = null;
 let modalMode = null;
@@ -358,10 +378,58 @@ function openConfirm({ title, message, confirmLabel = "Confirm", danger = false 
     });
 }
 
-function updateStatsDisplay() {
-    const key = todayKey();
-    const count = stats[key] || 0;
-    els.todayCount.textContent = String(count);
+function formatTotalWorked(ms) {
+    const totalMinutes = Math.floor(Math.max(0, ms) / 60000);
+    const totalHours = Math.floor(totalMinutes / 60);
+    const days = Math.floor(totalHours / 24);
+    const hours = totalHours % 24;
+    if (days > 0) {
+        return `${days}d ${hours}h`;
+    }
+    if (totalHours > 0) {
+        return `${totalHours}h`;
+    }
+    return `${totalMinutes}m`;
+}
+
+function getLiveTotalWorkMs() {
+    if (state.workSegmentStart) {
+        const cap = state.endTime > 0 ? Math.min(Date.now(), state.endTime) : Date.now();
+        return totalWorkMs + Math.max(0, cap - state.workSegmentStart);
+    }
+    return totalWorkMs;
+}
+
+function persistTotalWorkMs() {
+    api.storage.local.set({ [STORAGE_KEYS.totalWorkMs]: totalWorkMs });
+}
+
+function beginWorkSegment() {
+    if (!state.running || state.mode !== "work" || state.awaitingDismissal) {
+        return;
+    }
+    if (state.workSegmentStart) {
+        return;
+    }
+    state.workSegmentStart = Date.now();
+    persistState();
+}
+
+function endWorkSegment() {
+    if (!state.workSegmentStart) {
+        return;
+    }
+    const cap = state.endTime > 0 ? Math.min(Date.now(), state.endTime) : Date.now();
+    const elapsed = cap - state.workSegmentStart;
+    if (elapsed > 0) {
+        totalWorkMs += elapsed;
+        persistTotalWorkMs();
+    }
+    state.workSegmentStart = null;
+}
+
+function updateHeaderDisplay() {
+    els.workedTotal.textContent = formatTotalWorked(getLiveTotalWorkMs());
     const now = new Date();
     els.todayLine.textContent = now.toLocaleDateString(undefined, {
         weekday: "long",
@@ -403,8 +471,14 @@ function updateTimerDisplay() {
     els.statusLine.textContent = status;
 
     updateControls();
+    updatePlusOneButton();
 
-    document.title = `${formatTime(remaining)} - ${modeLabel(state.mode)}`;
+    if (!alarmActive) {
+        document.title = `${formatTime(remaining)} - ${modeLabel(state.mode)}`;
+    }
+
+    updateHeaderDisplay();
+    refreshIdleNudge();
 }
 
 const HINT_PREFIX = "​";
@@ -469,6 +543,7 @@ function resetTimerFromSelected() {
 }
 
 function resetTimer() {
+    endWorkSegment();
     stopTicking();
     cancelAllNotifs();
     state.awaitingDismissal = false;
@@ -478,6 +553,7 @@ function resetTimer() {
     state.mode = "work";
     state.activeProfile = null;
     state.endTime = 0;
+    state.extensionMs = 0;
     setMessage("");
     resetTimerFromSelected();
     persistState();
@@ -502,49 +578,158 @@ function startTicking() {
 }
 
 async function ensureAudioContext() {
-    if (audioContext) {
-        if (audioContext.state === "suspended") {
-            try { await audioContext.resume(); } catch (e) {}
-        }
-        return;
-    }
-
-    try {
-        const Ctor = window.AudioContext || window.webkitAudioContext;
-        if (!Ctor) {
+    if (!audioContext) {
+        try {
+            const Ctor = window.AudioContext || window.webkitAudioContext;
+            if (!Ctor) {
+                audioContext = null;
+                return;
+            }
+            audioContext = new Ctor();
+        } catch (error) {
             audioContext = null;
             return;
         }
-        audioContext = new Ctor();
-    } catch (error) {
-        audioContext = null;
+    }
+    if (audioContext.state === "suspended") {
+        try { await audioContext.resume(); } catch (e) {}
     }
 }
 
-function playAlarm() {
+function audioReady() {
+    return !!audioContext && audioContext.state === "running";
+}
+
+function installAudioPrimer() {
+    if (audioPrimerInstalled) return;
+    audioPrimerInstalled = true;
+    const prime = () => {
+        const wasLocked = !audioReady();
+        if (!wasLocked) return;
+        ensureAudioContext().then(() => {
+            if (alarmActive && wasLocked && audioReady()) {
+                playAlarm(computeAlarmPeak());
+            }
+        }).catch(() => {});
+    };
+    const events = ["pointerdown", "mousedown", "touchstart", "keydown", "click"];
+    for (const ev of events) {
+        document.addEventListener(ev, prime, { passive: true, capture: true });
+    }
+}
+
+function computeAlarmPeak() {
+    const rampMs = state.alarmRampDurationMs;
+    if (!(rampMs > 0)) return ALARM_PEAK_GAIN_MAX;
+    const elapsed = Date.now() - state.alarmRampStartTime;
+    const t = Math.max(0, Math.min(1, elapsed / rampMs));
+    return ALARM_PEAK_GAIN_MIN + (ALARM_PEAK_GAIN_MAX - ALARM_PEAK_GAIN_MIN) * t;
+}
+
+function playAlarm(peakGain = ALARM_PEAK_GAIN_MAX) {
     if (!audioContext) {
         return;
     }
     if (audioContext.state === "suspended") {
-        audioContext.resume();
+        audioContext.resume().catch(() => {});
+        if (audioContext.state !== "running") return;
     }
 
-    const now = audioContext.currentTime;
-    const oscillator = audioContext.createOscillator();
-    const gain = audioContext.createGain();
+    try {
+        const now = audioContext.currentTime;
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
 
-    oscillator.type = "sine";
-    oscillator.frequency.value = 880;
+        oscillator.type = "sine";
+        oscillator.frequency.value = 880;
 
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(peakGain, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
 
-    oscillator.connect(gain);
-    gain.connect(audioContext.destination);
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
 
-    oscillator.start(now);
-    oscillator.stop(now + 0.32);
+        oscillator.start(now);
+        oscillator.stop(now + 0.32);
+    } catch (e) {}
+}
+
+function playIdleNudge() {
+    if (!audioContext) return;
+    if (audioContext.state === "suspended") {
+        audioContext.resume().catch(() => {});
+        if (audioContext.state !== "running") return;
+    }
+    try {
+        const now = audioContext.currentTime;
+        const playNote = (freq, startOffset) => {
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            osc.type = "triangle";
+            osc.frequency.value = freq;
+            const start = now + startOffset;
+            gain.gain.setValueAtTime(0.0001, start);
+            gain.gain.exponentialRampToValueAtTime(IDLE_NUDGE_PEAK_GAIN, start + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+            osc.connect(gain);
+            gain.connect(audioContext.destination);
+            osc.start(start);
+            osc.stop(start + 0.2);
+        };
+        playNote(523.25, 0);
+        playNote(783.99, 0.12);
+    } catch (e) {}
+}
+
+function isIdleForNudge() {
+    return !state.running && !state.paused && !state.awaitingDismissal && !alarmActive;
+}
+
+function startIdleNudge() {
+    if (idleNudgeInterval) return;
+    idleNudgeInterval = setInterval(playIdleNudge, IDLE_NUDGE_MS);
+}
+
+function stopIdleNudge() {
+    if (!idleNudgeInterval) return;
+    clearInterval(idleNudgeInterval);
+    idleNudgeInterval = null;
+}
+
+function refreshIdleNudge() {
+    if (isIdleForNudge()) {
+        startIdleNudge();
+    } else {
+        stopIdleNudge();
+    }
+}
+
+function startTitleFlash() {
+    stopTitleFlash();
+    titleFlashOn = true;
+    const flash = () => {
+        const ringer = state.mode === "work" ? "Time to work!" : "Time for a pause!";
+        document.title = titleFlashOn ? `⏰ ${ringer}` : `··· ${ringer}`;
+        titleFlashOn = !titleFlashOn;
+    };
+    flash();
+    titleFlashInterval = setInterval(flash, 800);
+}
+
+function stopTitleFlash() {
+    if (titleFlashInterval) {
+        clearInterval(titleFlashInterval);
+        titleFlashInterval = null;
+    }
+}
+
+function tryVibrate(pattern) {
+    try {
+        if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+            navigator.vibrate(pattern);
+        }
+    } catch (e) {}
 }
 
 function startPersistentAlarm() {
@@ -552,16 +737,30 @@ function startPersistentAlarm() {
         return;
     }
     alarmActive = true;
-    const startBeeping = () => {
-        if (!alarmActive) return;
-        playAlarm();
-        alarmInterval = setInterval(playAlarm, 750);
-    };
-    if (audioContext && audioContext.state === "suspended") {
-        audioContext.resume().then(startBeeping, startBeeping);
-    } else {
-        startBeeping();
+
+    if (!state.awaitingDismissal) {
+        state.awaitingDismissal = true;
+        persistState();
     }
+
+    installAudioPrimer();
+    ensureAudioContext().catch(() => {});
+
+    const beepTick = () => {
+        if (!alarmActive) return;
+        if (audioContext && audioContext.state === "suspended") {
+            audioContext.resume().catch(() => {});
+        }
+        playAlarm(computeAlarmPeak());
+    };
+    beepTick();
+    alarmInterval = setInterval(beepTick, 750);
+
+    tryVibrate([300, 200, 300, 200, 300]);
+    alarmVibrationInterval = setInterval(() => tryVibrate([300, 200, 300, 200, 300]), 1500);
+
+    startTitleFlash();
+
     if (state.mode === "short_break" || state.mode === "long_break") {
         setMessage("Time for a pause!");
     } else {
@@ -585,6 +784,12 @@ function stopPersistentAlarm() {
         clearInterval(alarmInterval);
         alarmInterval = null;
     }
+    if (alarmVibrationInterval) {
+        clearInterval(alarmVibrationInterval);
+        alarmVibrationInterval = null;
+    }
+    tryVibrate(0);
+    stopTitleFlash();
     setMessage("");
 
     els.alarmStartBtn.hidden = true;
@@ -593,10 +798,14 @@ function stopPersistentAlarm() {
     if (state.awaitingDismissal) {
         state.awaitingDismissal = false;
         if (state.running && state.activeProfile) {
-            state.endTime = Date.now() + getDurationMs(state.activeProfile, state.mode);
+            state.endTime = Date.now() + getDurationMs(state.activeProfile, state.mode) + state.extensionMs;
             state.remainingMs = state.endTime - Date.now();
+            state.extensionMs = 0;
             rescheduleNotifsForActive();
             startTicking();
+            beginWorkSegment();
+        } else {
+            state.extensionMs = 0;
         }
         persistState();
         updateTimerDisplay();
@@ -614,21 +823,18 @@ function persistState() {
             endTime: state.endTime,
             activeProfileName: state.activeProfile ? state.activeProfile.name : null,
             awaitingDismissal: state.awaitingDismissal,
+            extensionMs: state.extensionMs,
+            workSegmentStart: state.workSegmentStart,
+            alarmRampStartTime: state.alarmRampStartTime,
+            alarmRampDurationMs: state.alarmRampDurationMs,
         },
     });
 }
 
-function incrementStats() {
-    const key = todayKey();
-    stats[key] = (stats[key] || 0) + 1;
-    api.storage.local.set({ [STORAGE_KEYS.stats]: stats });
-    updateStatsDisplay();
-}
-
 function transitionInPlace(profile) {
     if (state.mode === "work") {
+        endWorkSegment();
         state.workSessionsCompleted += 1;
-        incrementStats();
         if (state.workSessionsCompleted % profile.longBreakEvery === 0) {
             state.mode = "long_break";
         } else {
@@ -652,14 +858,18 @@ function catchUp() {
         return;
     }
     if (state.awaitingDismissal) {
-        state.remainingMs = getDurationMs(profile, state.mode);
+        state.remainingMs = getDurationMs(profile, state.mode) + state.extensionMs;
         return;
     }
     const now = Date.now();
     if (now >= state.endTime) {
+        const prevDurationMs = getDurationMs(profile, state.mode);
         transitionInPlace(profile);
         state.awaitingDismissal = true;
         state.remainingMs = getDurationMs(profile, state.mode);
+        state.alarmRampStartTime = Date.now();
+        state.alarmRampDurationMs = prevDurationMs * ALARM_RAMP_FRACTION;
+        persistState();
         cancelAllNotifs();
         startPersistentAlarm();
         return;
@@ -676,6 +886,63 @@ function rescheduleNotifsForActive() {
     const nextMode = nextModeAfter(profile, state.mode, state.workSessionsCompleted);
     const nextEnd = state.endTime + getDurationMs(profile, nextMode);
     scheduleNotifs(state.endTime, state.mode, nextEnd, nextMode);
+}
+
+function plusOneCurrentCost() {
+    if (state.awaitingDismissal) return PLUS_ONE_COST_ALARM;
+    if (state.running && (state.mode === "short_break" || state.mode === "long_break")) {
+        return PLUS_ONE_COST_BREAK;
+    }
+    return null;
+}
+
+function plusOneEnsureFreshDay() {
+    const today = todayKey();
+    if (plusOneState.date !== today) {
+        plusOneState.date = today;
+        plusOneState.tokens = PLUS_ONE_DAILY_BUDGET;
+        persistPlusOne();
+    }
+}
+
+function persistPlusOne() {
+    api.storage.local.set({ [STORAGE_KEYS.plusOneTokens]: plusOneState });
+}
+
+function updatePlusOneButton() {
+    plusOneEnsureFreshDay();
+    const cost = plusOneCurrentCost();
+    if (cost === null) {
+        els.plusOneBtn.hidden = true;
+        return;
+    }
+    const remaining = Math.floor(plusOneState.tokens / cost);
+    els.plusOneBtn.hidden = false;
+    els.plusOneBtn.disabled = remaining <= 0;
+    els.plusOneRemaining.textContent = String(remaining);
+}
+
+function onPlusOneClick() {
+    plusOneEnsureFreshDay();
+    const cost = plusOneCurrentCost();
+    if (cost === null) return;
+    if (plusOneState.tokens < cost) return;
+
+    plusOneState.tokens -= cost;
+    persistPlusOne();
+
+    if (state.awaitingDismissal) {
+        state.extensionMs += PLUS_ONE_ADD_MS;
+        if (state.activeProfile) {
+            state.remainingMs = getDurationMs(state.activeProfile, state.mode) + state.extensionMs;
+        }
+    } else if (state.running) {
+        state.endTime += PLUS_ONE_ADD_MS;
+        state.remainingMs = state.endTime - Date.now();
+        rescheduleNotifsForActive();
+    }
+    persistState();
+    updateTimerDisplay();
 }
 
 function attachHoldGesture(button, onComplete, durationMs = 3000) {
@@ -754,7 +1021,7 @@ function applyProfileEditToActive(oldProfile, newProfile) {
     state.activeProfile = newProfile;
 
     if (state.awaitingDismissal) {
-        state.remainingMs = getDurationMs(newProfile, state.mode);
+        state.remainingMs = getDurationMs(newProfile, state.mode) + state.extensionMs;
         return;
     }
 
@@ -872,9 +1139,19 @@ async function loadStorage() {
     const result = await api.storage.local.get([
         STORAGE_KEYS.profiles,
         STORAGE_KEYS.selectedProfile,
-        STORAGE_KEYS.stats,
         STORAGE_KEYS.timerState,
+        STORAGE_KEYS.plusOneTokens,
+        STORAGE_KEYS.totalWorkMs,
     ]);
+
+    const savedPlusOne = result[STORAGE_KEYS.plusOneTokens];
+    if (savedPlusOne && typeof savedPlusOne === "object") {
+        plusOneState = {
+            date: typeof savedPlusOne.date === "string" ? savedPlusOne.date : null,
+            tokens: Number.isFinite(savedPlusOne.tokens) ? savedPlusOne.tokens : PLUS_ONE_DAILY_BUDGET,
+        };
+    }
+    plusOneEnsureFreshDay();
 
     profiles = Array.isArray(result[STORAGE_KEYS.profiles]) && result[STORAGE_KEYS.profiles].length > 0
         ? result[STORAGE_KEYS.profiles]
@@ -884,7 +1161,9 @@ async function loadStorage() {
     if (!profiles.some((p) => p.name === selectedProfileName)) {
         selectedProfileName = profiles[0].name;
     }
-    stats = result[STORAGE_KEYS.stats] || {};
+
+    const savedTotal = result[STORAGE_KEYS.totalWorkMs];
+    totalWorkMs = Number.isFinite(savedTotal) && savedTotal >= 0 ? savedTotal : 0;
 
     const saved = result[STORAGE_KEYS.timerState];
     let resumed = false;
@@ -901,6 +1180,12 @@ async function loadStorage() {
             state.awaitingDismissal = !!saved.awaitingDismissal;
             state.paused = !!saved.paused;
             state.running = !!saved.running;
+            state.extensionMs = Number(saved.extensionMs) || 0;
+            state.workSegmentStart = Number.isFinite(saved.workSegmentStart) && saved.workSegmentStart > 0
+                ? saved.workSegmentStart
+                : null;
+            state.alarmRampStartTime = Number(saved.alarmRampStartTime) || 0;
+            state.alarmRampDurationMs = Number(saved.alarmRampDurationMs) || 0;
             resumed = true;
         }
     }
@@ -914,15 +1199,18 @@ async function loadStorage() {
                 startPersistentAlarm();
             } else if (state.running) {
                 startTicking();
+                beginWorkSegment();
             }
         } else if (state.awaitingDismissal) {
             startPersistentAlarm();
+        } else {
+            state.workSegmentStart = null;
         }
         updateTimerDisplay();
     } else {
         resetTimerFromSelected();
     }
-    updateStatsDisplay();
+    updateHeaderDisplay();
 }
 
 function bindEvents() {
@@ -936,6 +1224,7 @@ function bindEvents() {
                 updateTimerDisplay();
                 return;
             }
+            endWorkSegment();
             state.remainingMs = remaining;
             state.running = false;
             state.paused = true;
@@ -953,6 +1242,7 @@ function bindEvents() {
             state.endTime = Date.now() + state.remainingMs;
             rescheduleNotifsForActive();
             startTicking();
+            beginWorkSegment();
             setMessage("");
             persistState();
             updateTimerDisplay();
@@ -974,10 +1264,13 @@ function bindEvents() {
 
         rescheduleNotifsForActive();
         startTicking();
+        beginWorkSegment();
         setMessage("");
         persistState();
         updateTimerDisplay();
     });
+
+    els.plusOneBtn.addEventListener("click", onPlusOneClick);
 
     els.shorterBtn.addEventListener("click", () => {
         if (state.remainingMs <= 60000) return;
@@ -1021,6 +1314,19 @@ function bindEvents() {
     els.modalSaveBtn.addEventListener("click", saveFromModal);
     els.modalCancelBtn.addEventListener("click", closeProfileModal);
 
+    if (els.longEveryInfo) {
+        els.longEveryInfo.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            els.longEveryInfo.classList.toggle("info-open");
+        });
+        document.addEventListener("click", (e) => {
+            if (!els.longEveryInfo.contains(e.target)) {
+                els.longEveryInfo.classList.remove("info-open");
+            }
+        });
+    }
+
     els.profileModal.addEventListener("click", (e) => {
         const target = e.target;
         if (target instanceof Element && target.hasAttribute("data-close")) {
@@ -1062,10 +1368,19 @@ function bindEvents() {
     });
 
     document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && alarmActive && audioContext && audioContext.state === "suspended") {
+            audioContext.resume().catch(() => {});
+        }
         if (state.running) {
             catchUp();
         }
         updateTimerDisplay();
+    });
+
+    window.addEventListener("focus", () => {
+        if (alarmActive && audioContext && audioContext.state === "suspended") {
+            audioContext.resume().catch(() => {});
+        }
     });
 }
 
@@ -1084,6 +1399,10 @@ async function init() {
             });
         } catch (e) {}
     }
+
+    installAudioPrimer();
+    ensureAudioContext().catch(() => {});
+
     await loadStorage();
     bindEvents();
     updateTimerDisplay();

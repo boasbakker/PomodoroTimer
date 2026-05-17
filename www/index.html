@@ -19,8 +19,8 @@
             </div>
             <div class="stats">
                 <div class="stat">
-                    <span class="stat-label">Sessions</span>
-                    <span id="todayCount" class="stat-value">0</span>
+                    <span class="stat-label">Worked</span>
+                    <span id="workedTotal" class="stat-value">0h</span>
                 </div>
             </div>
         </header>
@@ -36,6 +36,7 @@
             <div class="controls">
                 <button id="toggleBtn" class="btn primary">Start</button>
                 <button id="shorterBtn" class="btn ghost" hidden>−1 min</button>
+                <button id="plusOneBtn" class="btn ghost" hidden>+1 (<span id="plusOneRemaining">0</span> left)</button>
                 <button id="resetBtn" class="btn ghost" hidden>
                     <span class="hold-btn-label">Reset</span>
                 </button>
@@ -83,10 +84,16 @@
                         <span>Short break (min)</span>
                         <input id="shortBreakInput" type="number" min="1" />
                     </label>
-                    <label class="field">
-                        <span>Long break every</span>
+                    <div class="field">
+                        <span class="field-label-row">
+                            <label for="longEveryInput">Long break every</label>
+                            <button type="button" id="longEveryInfo" class="info-btn" aria-label="What does 'Long break every' mean?">
+                                <span aria-hidden="true">i</span>
+                                <span class="info-tooltip" role="tooltip">After every N work sessions, the next break is a long break instead of a short one. With N = 4: short, short, short, long &mdash; then repeat.</span>
+                            </button>
+                        </span>
                         <input id="longEveryInput" type="number" min="1" />
-                    </label>
+                    </div>
                     <label class="field">
                         <span>Long break (min)</span>
                         <input id="longBreakInput" type="number" min="1" />
