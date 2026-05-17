@@ -17,10 +17,8 @@ async function enforcePomodoroTab(tabId) {
         return;
     }
 
-    const targetIndex = Math.max(0, pinnedCount - 1);
-
     try {
-        await api.tabs.move(tabId, { index: targetIndex });
+        await api.tabs.move(tabId, { index: pinnedCount });
     } catch (error) {
         return;
     }

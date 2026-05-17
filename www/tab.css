@@ -4,6 +4,10 @@
     --muted: #5b6a70;
     --accent: #0a7a6a;
     --accent-strong: #0b5c59;
+    --accent-short: #4a90b8;
+    --accent-short-strong: #2f6f8e;
+    --accent-long: #7a5da8;
+    --accent-long-strong: #5a3f88;
     --accent-warm: #e36d5a;
     --danger: #c0392b;
     --panel: rgba(255, 255, 255, 0.78);
@@ -26,6 +30,16 @@ body {
     color: var(--ink);
     font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
     letter-spacing: 0.2px;
+}
+
+body.mode-short_break {
+    --accent: var(--accent-short);
+    --accent-strong: var(--accent-short-strong);
+}
+
+body.mode-long_break {
+    --accent: var(--accent-long);
+    --accent-strong: var(--accent-long-strong);
 }
 
 .app {
@@ -119,7 +133,7 @@ h1 {
     position: relative;
     display: grid;
     place-items: center;
-    transition: background 0.25s ease;
+    transition: background 0.4s ease;
 }
 
 .ring-core {
@@ -153,6 +167,7 @@ h1 {
     margin: 0;
     color: var(--accent-strong);
     font-weight: 600;
+    transition: color 0.4s ease;
 }
 
 .controls {
@@ -187,6 +202,7 @@ h1 {
 .btn.primary {
     background: var(--accent);
     color: #ffffff;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.4s ease;
 }
 
 .btn.ghost {
@@ -238,7 +254,7 @@ h1 {
 
 .hold-btn.holding::before {
     transform: scaleX(1);
-    transition: transform 3s linear;
+    transition: transform var(--hold-duration, 3s) linear;
 }
 
 .hold-btn.completed {
@@ -248,6 +264,10 @@ h1 {
 .hold-btn.completed::before {
     transform: scaleX(1);
     transition: none;
+}
+
+.btn.ghost.hold-btn::before {
+    background: rgba(27, 36, 40, 0.18);
 }
 
 .hold-btn.danger {
@@ -412,6 +432,21 @@ h1 {
     display: grid;
     overflow: hidden;
     animation: fadeIn 0.22s ease-out;
+}
+
+.modal-card-sm {
+    max-width: 360px;
+}
+
+.confirm-message {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.btn.primary.danger {
+    background: var(--danger);
 }
 
 .modal-header {

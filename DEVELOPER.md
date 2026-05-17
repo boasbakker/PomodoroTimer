@@ -42,7 +42,7 @@ Platform-specific bits, for reference:
 2. Click **Load Temporary Add-on**.
 3. Select [www/manifest.json](www/manifest.json).
 
-The extension pins itself to the first tab slot of every normal window and re-opens if you close it.
+The extension pins itself to the last pinned tab slot of every normal window and re-opens if you close it.
 
 ## Run as an Android app
 
@@ -69,3 +69,8 @@ Two notifications are scheduled in advance on Android (current session end + nex
 - The currently-running session is in-memory only; refreshing the tab or killing the Android app resets it. Profiles and today's stats persist via `localStorage`.
 - The alarm-until-dismissed loop only sustains while the app/tab is open. On Android, the LocalNotification fires at the scheduled moment even if the app is closed, but it can't ring indefinitely — that would require a foreground service, which this app deliberately doesn't run.
 - `localStorage` is also what backs the Capacitor WebView's storage on Android, so the small `api.storage.local` shim at the top of [www/tab.js](www/tab.js) works identically on both targets.
+
+**Design principles:**
+- Reloading the tab or closing the app should impair functionality as little as possible
+- There is no "+1 minute" button, only a "-1 minute" button. This is intentional. 
+- If really needed, something like this can be enabled in the settings with a maximum of 20% of the original time for work or a max of 50% extra for break or smth, but this is for later. 

@@ -70,24 +70,30 @@ async function cancelAllNotifs() {
 const DEFAULT_PROFILES = [
     {
         name: "Classic 25/5/15",
+        topText: "Customizable Pomodoro timer",
         workMin: 25,
         shortBreakMin: 5,
         longBreakEvery: 4,
         longBreakMin: 15,
+        alarmHoldSec: 3,
     },
     {
         name: "Deep 50/10/20",
+        topText: "Customizable Pomodoro timer",
         workMin: 50,
         shortBreakMin: 10,
         longBreakEvery: 3,
         longBreakMin: 20,
+        alarmHoldSec: 3,
     },
     {
         name: "WLG",
+        topText: "Customizable Pomodoro timer",
         workMin: 65,
         shortBreakMin: 5,
         longBreakEvery: 2,
         longBreakMin: 25,
+        alarmHoldSec: 3,
     },
 ];
 
@@ -110,6 +116,7 @@ const state = {
 };
 
 const els = {
+    topTextDisplay: document.getElementById("topTextDisplay"),
     todayLine: document.getElementById("todayLine"),
     todayCount: document.getElementById("todayCount"),
     modeLabel: document.getElementById("modeLabel"),
@@ -117,10 +124,16 @@ const els = {
     statusLine: document.getElementById("statusLine"),
     messageLine: document.getElementById("messageLine"),
     progressRing: document.getElementById("progressRing"),
-    startBtn: document.getElementById("startBtn"),
-    pauseBtn: document.getElementById("pauseBtn"),
+    toggleBtn: document.getElementById("toggleBtn"),
     resetBtn: document.getElementById("resetBtn"),
+    resetLabel: document.querySelector("#resetBtn .hold-btn-label"),
+    shorterBtn: document.getElementById("shorterBtn"),
     alarmStartBtn: document.getElementById("alarmStartBtn"),
+    confirmModal: document.getElementById("confirmModal"),
+    confirmTitle: document.getElementById("confirmTitle"),
+    confirmMessage: document.getElementById("confirmMessage"),
+    confirmOkBtn: document.getElementById("confirmOkBtn"),
+    confirmCancelBtn: document.getElementById("confirmCancelBtn"),
     profileList: document.getElementById("profileList"),
     newProfileBtn: document.getElementById("newProfileBtn"),
     defaultsBtn: document.getElementById("defaultsBtn"),
@@ -131,10 +144,12 @@ const els = {
     modalCancelBtn: document.getElementById("modalCancelBtn"),
     modalDeleteBtn: document.getElementById("modalDeleteBtn"),
     nameInput: document.getElementById("nameInput"),
+    topTextInput: document.getElementById("topTextInput"),
     workInput: document.getElementById("workInput"),
     shortBreakInput: document.getElementById("shortBreakInput"),
     longEveryInput: document.getElementById("longEveryInput"),
     longBreakInput: document.getElementById("longBreakInput"),
+    alarmHoldInput: document.getElementById("alarmHoldInput"),
 };
 
 let profiles = [];
@@ -204,10 +219,12 @@ function setMessage(text) {
 
 function getProfileFromFields() {
     const name = els.nameInput.value.trim();
+    const topText = els.topTextInput.value.trim() || "Customizable Pomodoro timer";
     const workMin = Number.parseInt(els.workInput.value, 10);
     const shortBreakMin = Number.parseInt(els.shortBreakInput.value, 10);
     const longBreakEvery = Number.parseInt(els.longEveryInput.value, 10);
     const longBreakMin = Number.parseInt(els.longBreakInput.value, 10);
+    const alarmHoldSec = Number.parseInt(els.alarmHoldInput.value, 10);
 
     if (!name) {
         return null;
@@ -224,13 +241,18 @@ function getProfileFromFields() {
     if (!Number.isFinite(longBreakMin) || longBreakMin <= 0) {
         return null;
     }
+    if (!Number.isFinite(alarmHoldSec) || alarmHoldSec < 1 || alarmHoldSec > 30) {
+        return null;
+    }
 
     return {
         name,
+        topText,
         workMin,
         shortBreakMin,
         longBreakEvery,
         longBreakMin,
+        alarmHoldSec,
     };
 }
 
@@ -239,10 +261,12 @@ function loadProfileFields(profile) {
         return;
     }
     els.nameInput.value = profile.name;
+    els.topTextInput.value = profile.topText !== undefined ? profile.topText : "Customizable Pomodoro timer";
     els.workInput.value = String(profile.workMin);
     els.shortBreakInput.value = String(profile.shortBreakMin);
     els.longEveryInput.value = String(profile.longBreakEvery);
     els.longBreakInput.value = String(profile.longBreakMin);
+    els.alarmHoldInput.value = String(profile.alarmHoldSec ?? 3);
 }
 
 function renderProfileList() {
@@ -288,13 +312,50 @@ function renderProfileList() {
     }
 }
 
-function selectProfile(name) {
+async function selectProfile(name) {
     const profile = profiles.find((p) => p.name === name);
     if (!profile) return;
+    if (name === selectedProfileName) return;
+    if (state.running || state.paused || state.awaitingDismissal) {
+        const ok = await openConfirm({
+            title: "Switch profile?",
+            message: "This will reset the current session.",
+            confirmLabel: "Switch & reset",
+            danger: true,
+        });
+        if (!ok) return;
+    }
     selectedProfileName = name;
     api.storage.local.set({ [STORAGE_KEYS.selectedProfile]: name });
     resetTimer();
     renderProfileList();
+}
+
+function openConfirm({ title, message, confirmLabel = "Confirm", danger = false }) {
+    return new Promise((resolve) => {
+        els.confirmTitle.textContent = title;
+        els.confirmMessage.textContent = message;
+        els.confirmOkBtn.textContent = confirmLabel;
+        els.confirmOkBtn.classList.toggle("danger", danger);
+        els.confirmModal.hidden = false;
+
+        const cleanup = (result) => {
+            els.confirmModal.hidden = true;
+            els.confirmOkBtn.removeEventListener("click", onOk);
+            els.confirmModal.removeEventListener("click", onClose);
+            document.removeEventListener("keydown", onKey);
+            resolve(result);
+        };
+        const onOk = () => cleanup(true);
+        const onClose = (e) => {
+            if (e.target instanceof Element && e.target.hasAttribute("data-confirm-close")) cleanup(false);
+        };
+        const onKey = (e) => { if (e.key === "Escape") cleanup(false); };
+
+        els.confirmOkBtn.addEventListener("click", onOk);
+        els.confirmModal.addEventListener("click", onClose);
+        document.addEventListener("keydown", onKey);
+    });
 }
 
 function updateStatsDisplay() {
@@ -323,7 +384,15 @@ function updateTimerDisplay() {
     els.timeLeft.textContent = formatTime(remaining);
     els.progressRing.style.setProperty("--progress", progress.toFixed(4));
 
+    document.body.classList.remove("mode-work", "mode-short_break", "mode-long_break");
+    document.body.classList.add(`mode-${state.mode}`);
+
     let status = "Ready";
+    const profileToUse = state.activeProfile || getSelectedProfile();
+    if (profileToUse && els.topTextDisplay) {
+        els.topTextDisplay.textContent = profileToUse.topText || "Customizable Pomodoro timer";
+    }
+
     if (state.awaitingDismissal) {
         status = "Alarm";
     } else if (state.running) {
@@ -333,7 +402,57 @@ function updateTimerDisplay() {
     }
     els.statusLine.textContent = status;
 
+    updateControls();
+
     document.title = `${formatTime(remaining)} - ${modeLabel(state.mode)}`;
+}
+
+const HINT_PREFIX = "​";
+
+function setHint(text) {
+    els.messageLine.textContent = text ? HINT_PREFIX + text : "";
+}
+
+function isShowingHint() {
+    const t = els.messageLine.textContent;
+    return t === "" || t.startsWith(HINT_PREFIX);
+}
+
+function updateControls() {
+    const showShorter = !state.awaitingDismissal && (state.running || state.paused) && state.remainingMs > 60000;
+    els.shorterBtn.hidden = !showShorter;
+
+    if (state.awaitingDismissal) {
+        return;
+    }
+
+    if (state.running) {
+        els.toggleBtn.textContent = "Pause";
+    } else if (state.paused) {
+        els.toggleBtn.textContent = "Resume";
+    } else {
+        els.toggleBtn.textContent = "Start";
+    }
+
+    const showReset = state.running || state.paused;
+    els.resetBtn.hidden = !showReset;
+    if (state.running) {
+        els.resetBtn.classList.add("hold-btn");
+        if (els.resetLabel) els.resetLabel.textContent = "Hold to reset";
+    } else {
+        els.resetBtn.classList.remove("hold-btn", "holding", "completed");
+        if (els.resetLabel) els.resetLabel.textContent = "Reset";
+    }
+
+    if (isShowingHint()) {
+        if (state.running) {
+            setHint("");
+        } else if (state.paused) {
+            setHint("Paused — Resume or Reset.");
+        } else {
+            setHint("Pick a profile, then press Start.");
+        }
+    }
 }
 
 function resetTimerFromSelected() {
@@ -359,6 +478,7 @@ function resetTimer() {
     state.mode = "work";
     state.activeProfile = null;
     state.endTime = 0;
+    setMessage("");
     resetTimerFromSelected();
     persistState();
 }
@@ -372,13 +492,13 @@ function stopTicking() {
 
 function startTicking() {
     stopTicking();
-    tickTimer = setInterval(() => {
-        if (!state.running) {
-            return;
-        }
+    const tick = () => {
+        if (!state.running) return;
         catchUp();
         updateTimerDisplay();
-    }, 200);
+    };
+    tick();
+    tickTimer = setInterval(tick, 200);
 }
 
 async function ensureAudioContext() {
@@ -432,11 +552,22 @@ function startPersistentAlarm() {
         return;
     }
     alarmActive = true;
-    playAlarm();
-    alarmInterval = setInterval(playAlarm, 1500);
-    setMessage("");
-    els.startBtn.hidden = true;
-    els.pauseBtn.hidden = true;
+    const startBeeping = () => {
+        if (!alarmActive) return;
+        playAlarm();
+        alarmInterval = setInterval(playAlarm, 750);
+    };
+    if (audioContext && audioContext.state === "suspended") {
+        audioContext.resume().then(startBeeping, startBeeping);
+    } else {
+        startBeeping();
+    }
+    if (state.mode === "short_break" || state.mode === "long_break") {
+        setMessage("Time for a pause!");
+    } else {
+        setMessage("Time to work!");
+    }
+    els.toggleBtn.hidden = true;
     els.resetBtn.hidden = true;
     const label = els.alarmStartBtn.querySelector(".hold-btn-label");
     if (label) {
@@ -457,9 +588,7 @@ function stopPersistentAlarm() {
     setMessage("");
 
     els.alarmStartBtn.hidden = true;
-    els.startBtn.hidden = false;
-    els.pauseBtn.hidden = false;
-    els.resetBtn.hidden = false;
+    els.toggleBtn.hidden = false;
 
     if (state.awaitingDismissal) {
         state.awaitingDismissal = false;
@@ -467,6 +596,7 @@ function stopPersistentAlarm() {
             state.endTime = Date.now() + getDurationMs(state.activeProfile, state.mode);
             state.remainingMs = state.endTime - Date.now();
             rescheduleNotifsForActive();
+            startTicking();
         }
         persistState();
         updateTimerDisplay();
@@ -559,6 +689,8 @@ function attachHoldGesture(button, onComplete, durationMs = 3000) {
             activePointerId = e.pointerId;
             try { button.setPointerCapture(e.pointerId); } catch (_) {}
         }
+        const ms = typeof durationMs === "function" ? durationMs() : durationMs;
+        button.style.setProperty("--hold-duration", ms + "ms");
         button.classList.add("holding");
         timerId = setTimeout(() => {
             timerId = null;
@@ -567,7 +699,7 @@ function attachHoldGesture(button, onComplete, durationMs = 3000) {
             button.classList.add("completed");
             setTimeout(() => button.classList.remove("completed"), 260);
             onComplete();
-        }, durationMs);
+        }, ms);
     };
 
     const cancel = () => {
@@ -576,6 +708,7 @@ function attachHoldGesture(button, onComplete, durationMs = 3000) {
             timerId = null;
         }
         button.classList.remove("holding");
+        button.style.removeProperty("--hold-duration");
         activePointerId = null;
     };
 
@@ -594,10 +727,12 @@ function openProfileModal(mode, profile) {
 
     const source = profile || {
         name: "New profile",
+        topText: "Customizable Pomodoro timer",
         workMin: 25,
         shortBreakMin: 5,
         longBreakEvery: 4,
         longBreakMin: 15,
+        alarmHoldSec: 3,
     };
     loadProfileFields(source);
 
@@ -615,6 +750,35 @@ function closeProfileModal() {
     els.modalError.textContent = "";
 }
 
+function applyProfileEditToActive(oldProfile, newProfile) {
+    state.activeProfile = newProfile;
+
+    if (state.awaitingDismissal) {
+        state.remainingMs = getDurationMs(newProfile, state.mode);
+        return;
+    }
+
+    const oldDuration = getDurationMs(oldProfile, state.mode);
+    const newDuration = getDurationMs(newProfile, state.mode);
+
+    if (state.running) {
+        const now = Date.now();
+        const remaining = Math.max(0, state.endTime - now);
+        const elapsed = oldDuration - remaining;
+        const newRemaining = Math.max(0, newDuration - elapsed);
+        state.endTime = now + newRemaining;
+        state.remainingMs = newRemaining;
+        if (newRemaining === 0) {
+            catchUp();
+        } else {
+            rescheduleNotifsForActive();
+        }
+    } else if (state.paused) {
+        const elapsed = oldDuration - state.remainingMs;
+        state.remainingMs = Math.max(0, newDuration - elapsed);
+    }
+}
+
 function saveFromModal() {
     const profile = getProfileFromFields();
     if (!profile) {
@@ -622,12 +786,17 @@ function saveFromModal() {
         return;
     }
 
+    const timerActive = state.running || state.paused || state.awaitingDismissal;
+
     if (modalMode === "create") {
         if (profiles.some((item) => item.name === profile.name)) {
             els.modalError.textContent = "A profile with that name already exists.";
             return;
         }
         profiles.push(profile);
+        if (!timerActive) {
+            selectedProfileName = profile.name;
+        }
     } else {
         const currentIndex = profiles.findIndex((item) => item.name === modalEditingName);
         if (currentIndex < 0) {
@@ -641,17 +810,29 @@ function saveFromModal() {
             els.modalError.textContent = "Another profile already has that name.";
             return;
         }
+        const oldProfile = profiles[currentIndex];
+        const wasActive = state.activeProfile && state.activeProfile.name === modalEditingName;
+        const wasSelected = selectedProfileName === modalEditingName;
         profiles[currentIndex] = profile;
+        if (wasActive) {
+            applyProfileEditToActive(oldProfile, profile);
+        }
+        if (wasSelected || !timerActive) {
+            selectedProfileName = profile.name;
+        }
     }
-
-    selectedProfileName = profile.name;
 
     api.storage.local.set({
         [STORAGE_KEYS.profiles]: profiles,
         [STORAGE_KEYS.selectedProfile]: selectedProfileName,
     });
 
-    resetTimer();
+    if (timerActive) {
+        persistState();
+        updateTimerDisplay();
+    } else {
+        resetTimerFromSelected();
+    }
 
     renderProfileList();
     closeProfileModal();
@@ -729,7 +910,9 @@ async function loadStorage() {
     if (resumed) {
         if (state.running) {
             catchUp();
-            if (state.running) {
+            if (state.awaitingDismissal) {
+                startPersistentAlarm();
+            } else if (state.running) {
                 startTicking();
             }
         } else if (state.awaitingDismissal) {
@@ -743,11 +926,24 @@ async function loadStorage() {
 }
 
 function bindEvents() {
-    els.startBtn.addEventListener("click", async () => {
-        setMessage("");
+    els.toggleBtn.addEventListener("click", async () => {
         await ensureAudioContext();
 
         if (state.running) {
+            const remaining = state.endTime - Date.now();
+            if (remaining <= 0) {
+                catchUp();
+                updateTimerDisplay();
+                return;
+            }
+            state.remainingMs = remaining;
+            state.running = false;
+            state.paused = true;
+            stopTicking();
+            cancelAllNotifs();
+            setMessage("");
+            persistState();
+            updateTimerDisplay();
             return;
         }
 
@@ -757,6 +953,7 @@ function bindEvents() {
             state.endTime = Date.now() + state.remainingMs;
             rescheduleNotifsForActive();
             startTicking();
+            setMessage("");
             persistState();
             updateTimerDisplay();
             return;
@@ -777,34 +974,45 @@ function bindEvents() {
 
         rescheduleNotifsForActive();
         startTicking();
+        setMessage("");
         persistState();
         updateTimerDisplay();
     });
 
-    els.pauseBtn.addEventListener("click", () => {
-        if (!state.running) {
-            return;
+    els.shorterBtn.addEventListener("click", () => {
+        if (state.remainingMs <= 60000) return;
+        state.remainingMs -= 60000;
+        if (state.running) {
+            state.endTime -= 60000;
+            if (state.endTime <= Date.now()) {
+                catchUp();
+            } else {
+                rescheduleNotifsForActive();
+            }
         }
-        const remaining = state.endTime - Date.now();
-        if (remaining <= 0) {
-            catchUp();
-            updateTimerDisplay();
-            return;
-        }
-        state.remainingMs = remaining;
-        state.running = false;
-        state.paused = true;
-        stopTicking();
-        cancelAllNotifs();
         persistState();
         updateTimerDisplay();
     });
 
     els.resetBtn.addEventListener("click", () => {
+        if (state.running) {
+            setMessage("Hold Reset to confirm.");
+            return;
+        }
         resetTimer();
     });
 
-    attachHoldGesture(els.alarmStartBtn, () => stopPersistentAlarm());
+    attachHoldGesture(els.resetBtn, () => {
+        if (state.running) {
+            resetTimer();
+        }
+    });
+
+    attachHoldGesture(
+        els.alarmStartBtn,
+        () => stopPersistentAlarm(),
+        () => ((state.activeProfile && state.activeProfile.alarmHoldSec) || 3) * 1000,
+    );
 
     els.newProfileBtn.addEventListener("click", () => {
         openProfileModal("create", null);
@@ -828,13 +1036,14 @@ function bindEvents() {
 
     attachHoldGesture(els.modalDeleteBtn, deleteFromModal);
 
-    els.defaultsBtn.addEventListener("click", () => {
-        const confirmReset = window.confirm(
-            "Replace all profiles with the defaults?"
-        );
-        if (!confirmReset) {
-            return;
-        }
+    els.defaultsBtn.addEventListener("click", async () => {
+        const ok = await openConfirm({
+            title: "Restore defaults?",
+            message: "Replace all profiles with the defaults.",
+            confirmLabel: "Restore",
+            danger: true,
+        });
+        if (!ok) return;
 
         profiles = [...DEFAULT_PROFILES];
         selectedProfileName = profiles[0].name;

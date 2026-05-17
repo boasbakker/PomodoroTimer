@@ -14,7 +14,7 @@
         <header class="top">
             <div>
                 <p class="eyebrow">Zen Pomodoro</p>
-                <h1>Focus in bold strokes.</h1>
+                <h1 id="topTextDisplay">Customizable Pomodoro timer</h1>
                 <p id="todayLine" class="subdued">Today</p>
             </div>
             <div class="stats">
@@ -34,9 +34,11 @@
                 </div>
             </div>
             <div class="controls">
-                <button id="startBtn" class="btn primary">Start</button>
-                <button id="pauseBtn" class="btn">Pause</button>
-                <button id="resetBtn" class="btn ghost">Reset</button>
+                <button id="toggleBtn" class="btn primary">Start</button>
+                <button id="shorterBtn" class="btn ghost" hidden>−1 min</button>
+                <button id="resetBtn" class="btn ghost" hidden>
+                    <span class="hold-btn-label">Reset</span>
+                </button>
                 <button id="alarmStartBtn" class="btn primary alarm-cta hold-btn" hidden>
                     <span class="hold-btn-label">Hold to start Work</span>
                 </button>
@@ -68,6 +70,10 @@
                     <span>Name</span>
                     <input id="nameInput" type="text" />
                 </label>
+                <label class="field">
+                    <span>Top text</span>
+                    <input id="topTextInput" type="text" placeholder="Customizable Pomodoro timer" />
+                </label>
                 <div class="field-grid">
                     <label class="field">
                         <span>Work (min)</span>
@@ -85,6 +91,10 @@
                         <span>Long break (min)</span>
                         <input id="longBreakInput" type="number" min="1" />
                     </label>
+                    <label class="field">
+                        <span>Alarm hold (s)</span>
+                        <input id="alarmHoldInput" type="number" min="1" max="30" step="1" />
+                    </label>
                 </div>
                 <p id="modalError" class="modal-error" aria-live="polite"></p>
             </div>
@@ -95,6 +105,23 @@
                 <span class="modal-spacer"></span>
                 <button id="modalCancelBtn" class="btn ghost" data-close>Cancel</button>
                 <button id="modalSaveBtn" class="btn primary">Save</button>
+            </footer>
+        </div>
+    </div>
+
+    <div id="confirmModal" class="modal" hidden aria-modal="true" role="dialog" aria-labelledby="confirmTitle">
+        <div class="modal-backdrop" data-confirm-close></div>
+        <div class="modal-card modal-card-sm">
+            <header class="modal-header">
+                <h3 id="confirmTitle">Are you sure?</h3>
+            </header>
+            <div class="modal-body">
+                <p id="confirmMessage" class="confirm-message"></p>
+            </div>
+            <footer class="modal-footer">
+                <span class="modal-spacer"></span>
+                <button id="confirmCancelBtn" class="btn ghost" data-confirm-close>Cancel</button>
+                <button id="confirmOkBtn" class="btn primary">Confirm</button>
             </footer>
         </div>
     </div>

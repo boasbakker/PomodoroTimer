@@ -1,1 +1,2 @@
 # TODO
+- Investigage and fix the bug where most of the times, the audio does not play correctly on Zen, but in some circumstances, it does. Probably deterministic but still highly dependend on exact steps you do (e.g. reload the tab, reload the extension, close the tab, etc.)
