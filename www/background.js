@@ -8,19 +8,41 @@ async function enforcePomodoroTab(tabId) {
         return;
     }
 
-    let pinnedCount = 0;
+    let snapshot = [];
+    let selfIndex = -1;
     try {
         const self = await api.tabs.get(tabId);
+        selfIndex = self.index;
         const windowTabs = await api.tabs.query({ windowId: self.windowId });
-        pinnedCount = windowTabs.filter((tab) => tab.pinned).length;
+        snapshot = windowTabs
+            .slice()
+            .sort((a, b) => a.index - b.index)
+            .map((t) => ({ index: t.index, pinned: t.pinned, isPomo: t.id === tabId, title: (t.title || "").slice(0, 30) }));
     } catch (error) {
         return;
     }
 
+    const pinnedCount = snapshot.filter((t) => t.pinned).length;
+    const target = Math.max(0, pinnedCount - 1);
+    console.log("[pomodoro] BEFORE move", { selfIndex, pinnedCount, target, snapshot });
+
     try {
-        await api.tabs.move(tabId, { index: pinnedCount });
+        await api.tabs.move(tabId, { index: target });
     } catch (error) {
+        console.log("[pomodoro] move failed", error);
         return;
+    }
+
+    try {
+        const after = await api.tabs.get(tabId);
+        const afterWindow = await api.tabs.query({ windowId: after.windowId });
+        const afterSnapshot = afterWindow
+            .slice()
+            .sort((a, b) => a.index - b.index)
+            .map((t) => ({ index: t.index, pinned: t.pinned, isPomo: t.id === tabId, title: (t.title || "").slice(0, 30) }));
+        console.log("[pomodoro] AFTER  move", { afterIndex: after.index, pinned: after.pinned, afterSnapshot });
+    } catch (error) {
+        /* ignore */
     }
 }
 
@@ -99,10 +121,14 @@ api.tabs.onMoved.addListener((_tabId, moveInfo) => {
 });
 
 api.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+    if (changeInfo.pinned !== undefined) {
+        ensureWindowPomodoroTab(tab.windowId);
+        return;
+    }
     if (tab.url !== POMODORO_URL) {
         return;
     }
-    if (changeInfo.pinned === false || changeInfo.status === "complete") {
+    if (changeInfo.status === "complete") {
         enforcePomodoroTab(tab.id);
     }
 });

@@ -97,11 +97,11 @@ const STORAGE_KEYS = {
 };
 
 const IDLE_NUDGE_MS = 60_000;
-const IDLE_NUDGE_PEAK_GAIN = 0.10;
+const IDLE_NUDGE_PEAK_GAIN = 0.25;
 
 const ALARM_RAMP_FRACTION = 0.10;
-const ALARM_PEAK_GAIN_MIN = 0.04;
-const ALARM_PEAK_GAIN_MAX = 0.20;
+const ALARM_PEAK_GAIN_MIN = 0.07;
+const ALARM_PEAK_GAIN_MAX = 1.00;
 
 const PLUS_ONE_BASE_TOKENS = 4;
 const PLUS_ONE_DAILY_BUDGET = 18 * PLUS_ONE_BASE_TOKENS;
@@ -890,7 +890,8 @@ function rescheduleNotifsForActive() {
 
 function plusOneCurrentCost() {
     if (state.awaitingDismissal) return PLUS_ONE_COST_ALARM;
-    if (state.running && (state.mode === "short_break" || state.mode === "long_break")) {
+    if (state.running) {
+        if (state.mode === "work") return PLUS_ONE_COST_ALARM;
         return PLUS_ONE_COST_BREAK;
     }
     return null;

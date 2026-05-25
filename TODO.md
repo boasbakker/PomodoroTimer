@@ -1,6 +1,19 @@
 # SHORT TERM TODO
 
+- The tab is at the wrong location (2 pinned tabs are underneath)
 - The pause beep (every minute, different thing) has a bug: either it doesn't work or its inaudible due to low volume.
+
+# MID TERM TODO
+
+- Add a planning mode where you enter your todo items and the time it takes
+- Het +1 / -1 systeem moet even opnieuw ontworpen worden zodat het logischer is. Pauze -1 zou eigenlijk niet "gratis" moeten zijn.
+- Voor Jeroen Krijgsman: ja nee voor mij werkte zn standaard timer ook niet, maar daarom heb ik dus zelf een app gemaakt
+
+## Day planning tab
+~~Add exponential (e.g. 0.5x) factor for work/pause extensions instead +1 minute. This creates convergent geometric series
+
+Aan het begin kies je: start planning at: ...
+- Eerst 5, 10, 15, 20, 30, 60 multiple denk ik. Of 12 min multiple kan ook
 
 # LONG TERM
 
